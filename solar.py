@@ -1,5 +1,8 @@
 import argparse
 
+def add(a: int, b: int) -> int:
+    return a + b
+
 def main():
     parser = argparse.ArgumentParser(description="A tool to model cost and utilization of solar power systems.")
     subparsers = parser.add_subparsers(title="commands", dest="command")
