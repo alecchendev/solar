@@ -1,63 +1,60 @@
 import argparse
+from enum import Enum
 
 DATA_DIR = "data"
 
+
 # Note: no Alaska or Hawaii
-EASTERN_STATES = [
-    "al",
-    "ar",
-    "ct",
-    "de",
-    "fl",
-    "ga",
-    "il",
-    "in",
-    "ia",
-    "ks",
-    "ky",
-    "la",
-    "me",
-    "md",
-    "ma",
-    "mi",
-    "mn",
-    "ms",
-    "mo",
-    "mt",
-    "ne",
-    "nh",
-    "nj",
-    "nm-east",
-    "ny",
-    "nc",
-    "oh",
-    "ok",
-    "pa",
-    "ri",
-    "sc",
-    "sd",
-    "tn",
-    "tx-east",
-    "vt",
-    "va",
-    "wv",
-    "wi",
-]
-WESTERN_STATES = [
-    "az",
-    "ca",
-    "co",
-    "id",
-    "mt",
-    "nv",
-    "nm",
-    "or",
-    "sd",
-    "tx",
-    "ut",
-    "wa",
-    "wy",
-]
+class State(Enum):
+    ALABAMA = "al"
+    ARKANSAS = "ar"
+    ARIZONA = "az"
+    CALIFORNIA = "ca"
+    COLORADO = "co"
+    CONNECTICUT = "ct"
+    DELAWARE = "de"
+    FLORIDA = "fl"
+    GEORGIA = "ga"
+    IDAHO = "id"
+    ILLINOIS = "il"
+    INDIANA = "in"
+    IOWA = "ia"
+    KANSAS = "ks"
+    KENTUCKY = "ky"
+    LOUISIANA = "la"
+    MAINE = "me"
+    MARYLAND = "md"
+    MASSACHUSETTS = "ma"
+    MICHIGAN = "mi"
+    MINNESOTA = "mn"
+    MISSISSIPPI = "ms"
+    MISSOURI = "mo"
+    MONTANA = "mt"
+    NEBRASKA = "ne"
+    NEVADA = "nv"
+    NEW_HAMPSHIRE = "nh"
+    NEW_JERSEY = "nj"
+    NEW_MEXICO = "nm"
+    NEW_MEXICO_EAST = "nm-east"
+    NEW_YORK = "ny"
+    NORTH_CAROLINA = "nc"
+    OHIO = "oh"
+    OKLAHOMA = "ok"
+    OREGON = "or"
+    PENNSYLVANIA = "pa"
+    RHODE_ISLAND = "ri"
+    SOUTH_CAROLINA = "sc"
+    SOUTH_DAKOTA = "sd"
+    TENNESSEE = "tn"
+    TEXAS = "tx"
+    TEXAS_EAST = "tx-east"
+    UTAH = "ut"
+    VERMONT = "vt"
+    VIRGINIA = "va"
+    WASHINGTON = "wa"
+    WEST_VIRGINIA = "wv"
+    WISCONSIN = "wi"
+    WYOMING = "wy"
 
 
 def add(a: int, b: int) -> int:
