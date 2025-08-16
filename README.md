@@ -10,6 +10,11 @@ Usage
     - `python3 solar.py`
 - Run tests
     - `python3 test.py`
+- Type check
+    - `mypy solar.py test.py`
+- Format/lint
+    - `ruff format`
+    - `ruff check`
 
 Goals
 - Prescribe a way to do things to simplify usage, but allow multiple options
