@@ -1,6 +1,7 @@
 import argparse
 import io
 import os
+from os.path import isdir
 from typing import Any
 import zipfile
 from enum import Enum
@@ -8,6 +9,7 @@ from enum import Enum
 import requests
 import pandas as pd
 import folium
+import numpy as np
 
 
 class StringEnum(str, Enum):
@@ -223,6 +225,288 @@ def create_state_files_df(directory: str) -> pd.DataFrame:
         rows += state_rows
     return pd.DataFrame(rows)
 
+
+# Optimization
+
+
+def read_plant_csv(directory: str, state: State, filename: str) -> pd.DataFrame:
+    return pd.read_csv(f"{directory}/{state}/{filename}").rename(
+        columns={"LocalTime": "local_time", "Power(MW)": "power_mw"}
+    )
+
+
+def uptime_with_battery_with_inputs(
+    load: float, battery_sizes: np.ndarray, array_sizes: np.ndarray, sol: np.ndarray
+) -> pd.DataFrame:
+    """
+    Simulates battery storage system to compute uptime and utilization.
+
+    Here load is a normalization parameter, i.e. `sol` is assumed to be normalized
+    to `load` MW, and we can compute uptime and utilization of many battery +
+    array sizes, without having to simulate many scaled versions of `sol`.
+    I think there is a more intuitive way to write this (especially given
+    we're in python land and not mathematica, but I haven't gotten around
+    to it).
+
+    An assumption here is that load is constant throughout a sim, when in
+    reality it fluctuates. It would be really cool to get a load data set to fill
+    in the variability across each part of the day/year.
+
+    Can also simulate as no battery system if battery_sizes are zero.
+
+    Parameters:
+    battery_sizes: List of battery capacities (xWh).
+    array_sizes: List of solar array sizes (xW).
+    sol: Solar generation (xW) over time steps.
+
+    Important thing here is that all parameters are in the same kW vs mW vs etc. unit.
+
+    Returns:
+    pd.DataFrame with the following columns:
+        - Battery capacities
+        - Load demands
+        - Uptime (fraction of time battery is non-empty)
+        - Utilization (fraction of load met)
+    """
+    # Initialize arrays
+    n_steps = len(sol)
+    n_battery_sizes = len(battery_sizes)
+    n_array_sizes = len(array_sizes)
+    time_step = 8760 / n_steps  # Time step in hours since capacity is in xWh
+
+    # 2D matrices for loads and capacities
+    # Normalize by array_sizes to avoid scaling many sols for each array_size
+    loadsmat = np.tile(load / array_sizes, (n_battery_sizes, 1))
+    capsmat = np.tile(battery_sizes[:, np.newaxis], (1, n_array_sizes)) / loadsmat
+
+    array_size_mat = np.tile(array_sizes, (n_battery_sizes, 1))
+    battery_size_mat = np.tile(battery_sizes[:, np.newaxis], (1, n_array_sizes))
+
+    # 3D array for battery state: [time steps, capacities, loads]
+    batt = np.zeros((n_steps, n_battery_sizes, n_array_sizes))
+    batt[0] = capsmat  # Batteries start full
+
+    # 3D array for utilization, initialized to zeros
+    util = np.zeros_like(batt)
+
+    # Main loop over time steps
+    for i in range(n_steps - 1):
+        # Solar discretization: 1 if solar >= load, 0 otherwise
+        # sundisc = 0.5 + 0.5 * np.sign(sol[i] - loadsmat)
+        sundisc = (sol[i] >= loadsmat).astype(int)
+
+        # Battery discharge discretization: 1 if battery can cover shortfall
+        # Make sure that we don't accidentally add to battery if solar exceeds load
+        # battdisc = 0.5 + 0.5 * np.sign(batt[i] - time_step * (loadsmat - sol[i]))
+        battdisc = (batt[i] >= time_step * np.maximum(loadsmat - sol[i], 0.0)).astype(
+            int
+        )
+
+        # Utilization update
+        util[i] = (
+            sundisc
+            + (1 - sundisc) * battdisc
+            + (1 - sundisc)
+            * (1 - battdisc)
+            * (sol[i] / loadsmat + batt[i] / (time_step * loadsmat))
+        )
+
+        # Battery state update
+        batt[i + 1] = (
+            sundisc * (batt[i] + time_step * (sol[i] - loadsmat))
+            + (1 - sundisc) * battdisc * (batt[i] - time_step * (loadsmat - sol[i]))
+            + (1 - sundisc) * (1 - battdisc) * 0.0
+        )  # 0 case here just to explicitly show else clause
+
+        # Apply capacity constraint
+        # NOTE: important difference between this and reference,
+        # we need to compute capdisc on the next battery state not the current.
+        # This fixes a bug where we get "uptime" even when we pass in
+        # a battery with capacity 0.
+        batt[i + 1] = np.minimum(batt[i + 1], capsmat)
+
+    # Compute uptime (fraction of time battery is non-empty)
+    uptime = np.mean(np.sign(batt), axis=0)
+
+    # Compute utilization (fraction of load met)
+    utilization = np.mean(util, axis=0)
+
+    # Create DataFrame
+    # Flatten capsmat, loadsmat, uptime, and utilization for DataFrame
+    battery_size_flat = battery_size_mat.flatten()
+    array_size_flat = array_size_mat.flatten()
+    caps_flat = capsmat.flatten()
+    loads_flat = loadsmat.flatten()
+    uptime_flat = uptime.flatten()
+    utilization_flat = utilization.flatten()
+
+    # Construct DataFrame
+    df = pd.DataFrame(
+        {
+            "battery_size": battery_size_flat,
+            "array_size": array_size_flat,
+            "capacity": caps_flat,
+            "load": loads_flat,
+            "uptime": uptime_flat,
+            "utilization": utilization_flat,
+        }
+    )
+
+    return df
+
+
+def all_in_system_cost(
+    solar_cost: float,
+    battery_cost: float,
+    load_cost: float,
+    capacity: np.ndarray,
+    load: np.ndarray,
+    utilization: np.ndarray,
+) -> np.ndarray:
+    return (capacity * battery_cost + solar_cost + load_cost * load) / (
+        load * utilization
+    )
+
+
+def all_in_system_cost_parallel(
+    solarcost: float,
+    batterycost: float,
+    loadcost: float,
+    load: float,
+    batterysize: np.ndarray,
+    arraysize: np.ndarray,
+    sol: np.ndarray,
+) -> pd.DataFrame:
+    result = uptime_with_battery_with_inputs(load, batterysize, arraysize, sol)
+    result["cost"] = all_in_system_cost(
+        solarcost,
+        batterycost,
+        loadcost,
+        result["capacity"].to_numpy(),
+        result["load"].to_numpy(),
+        result["utilization"].to_numpy(),
+    )
+    return result
+
+
+class OptimizeColumn(StringEnum):
+    SOLAR_COST_MW = "solar cost $/MW"
+    BATTERY_COST_MWH = "battery cost $/MWh"
+    LOAD_COST_MW = "load cost $/MW"
+    ARRAYSIZE_MW = "arraysize (MW)"
+    BATTERY_SIZE_MWH = "battery size (MWh)"
+    LOAD_SIZE_MW = "load size (1 MW by definition)"
+    ARRAY_COST = "array cost $"
+    BATTERY_COST = "battery cost $"
+    LOAD_COST_NORMALIZED = "load cost $ (all normalized to 1 MW)"
+    TOTAL_POWER_SYSTEM_COST = "total power system cost $"
+    TOTAL_SYSTEM_COST = "total system cost $"
+    TOTAL_SYSTEM_COST_PER_UTILIZATION = "total system cost per utilization"
+    BATTERY_SIZE_RELATIVE = "battery size relative to 1 MW array"
+    LOAD_SIZE_RELATIVE = "load size relative to 1 MW array"
+    ANNUAL_BATTERY_UTILIZATION = "annual battery utilization"
+    ANNUAL_LOAD_UTILIZATION = "annual load utilization"
+
+
+def find_minimum_system_cost_parallel(
+    solarcost: float,
+    batterycost: float,
+    loadcost: float,
+    load: float,
+    sol: np.ndarray,
+) -> dict[str, Any]:
+    # Ideally inputs = dim1, dim2, val1, val2, density (total steps in the range)
+    array_dim = 30.0
+    battery_dim = 30.0
+    array_size = array_dim / 2  # start search from 0 to array_dim
+    battery_size = battery_dim / 2  # start search from 0 to battery_dim
+    array_density = 1.0
+    battery_density = 1.0
+    n_steps = 5
+
+    min_cost = None
+    best_row = None
+
+    for _ in range(n_steps):
+        start_array = array_size - array_dim / 2
+        end_array = array_size + array_dim / 2
+        array_sizes = np.arange(
+            max(start_array, array_density), end_array, array_density
+        )
+
+        start_battery = battery_size - battery_dim / 2
+        end_battery = battery_size + battery_dim / 2
+        battery_sizes = np.arange(max(start_battery, 0), end_battery, battery_density)
+
+        costs = uptime_with_battery_with_inputs(load, battery_sizes, array_sizes, sol)
+        costs["cost"] = all_in_system_cost(
+            solarcost,
+            batterycost,
+            loadcost,
+            costs["capacity"].to_numpy(),
+            costs["load"].to_numpy(),
+            costs["utilization"].to_numpy(),
+        )
+
+        best_rows = costs.loc[costs["cost"] == costs["cost"].min()]
+        best_row = best_rows.iloc[0]
+        # Add a small amount to accept a tolerance for floating point shenanigans
+        assert min_cost is None or best_row["cost"] <= min_cost + 0.0000001, (
+            f"{min_cost} {best_row['cost']} > {min_cost}, {battery_size} != {best_row['battery_size']}, {array_size} != {best_row['array_size']}"
+        )
+        min_cost = best_row["cost"]
+        battery_size = best_row["battery_size"]
+        array_size = best_row["array_size"]
+        assert min_cost >= 0
+
+        array_dim /= 2
+        battery_dim /= 2
+        array_density /= 2
+        battery_density /= 2
+
+    assert min_cost is not None
+    assert best_row is not None
+
+    return {
+        OptimizeColumn.SOLAR_COST_MW: solarcost,
+        OptimizeColumn.BATTERY_COST_MWH: batterycost,
+        OptimizeColumn.LOAD_COST_MW: loadcost,
+        OptimizeColumn.ARRAYSIZE_MW: array_size,
+        OptimizeColumn.BATTERY_SIZE_MWH: battery_size,
+        OptimizeColumn.LOAD_SIZE_MW: load,
+        OptimizeColumn.ARRAY_COST: solarcost * array_size,
+        OptimizeColumn.BATTERY_COST: batterycost * battery_size,
+        OptimizeColumn.LOAD_COST_NORMALIZED: loadcost,
+        OptimizeColumn.TOTAL_POWER_SYSTEM_COST: solarcost * array_size
+        + batterycost * battery_size,
+        OptimizeColumn.TOTAL_SYSTEM_COST: solarcost * array_size
+        + batterycost * battery_size
+        + loadcost,
+        OptimizeColumn.TOTAL_SYSTEM_COST_PER_UTILIZATION: min_cost,
+        OptimizeColumn.BATTERY_SIZE_RELATIVE: best_row["capacity"],
+        OptimizeColumn.LOAD_SIZE_RELATIVE: best_row["load"],
+        OptimizeColumn.ANNUAL_BATTERY_UTILIZATION: best_row["uptime"],
+        OptimizeColumn.ANNUAL_LOAD_UTILIZATION: best_row["utilization"],
+    }
+
+
+def compute_optimal_power_across_loads(
+    solar_cost: float,
+    battery_cost: float,
+    load_costs: list[float],
+    load: float,
+    sol: np.ndarray,
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            find_minimum_system_cost_parallel(
+                solar_cost, battery_cost, load_cost, load, sol
+            )
+            for load_cost in load_costs
+        ]
+    )
+
+
 # Plot state maps
 
 US_STATE_CENTERS = {
@@ -302,7 +586,15 @@ def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
     m.save(filename)
     return filename
 
+
+# Plotting TODO:
+# - File meta data
+#   - Plot histogram of capacities for a state
+# - Plot utilization for each day over a year
+# - Plot power generation over a day, overlaying all days onto one graph
+
 # Main CLI
+
 
 class Command(StringEnum):
     DOWNLOAD = "download"
@@ -311,6 +603,7 @@ class Command(StringEnum):
 
 
 DEFAULT_DATA_DIRECTORY = "data"
+DEFAULT_OUTPUT_DIRECTORY = "output"
 
 
 def main():
@@ -335,9 +628,27 @@ def main():
     )
 
     # TODO: Produce optimal configurations
-    subparsers.add_parser(
+    optimize_parser = subparsers.add_parser(
         Command.OPTIMIZE,
         help="Produce optimal array and battery sizes for a range of load costs",
+    )
+    optimize_parser.add_argument(
+        "--directory",
+        default=DEFAULT_DATA_DIRECTORY,
+        help=f"Directory where state data to is located. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+    )
+    optimize_parser.add_argument(
+        "--state", required=True, help="Which state to plot a map of solar plants."
+    )
+    optimize_parser.add_argument(
+        "--file",
+        required=True,
+        help="The filename for the plant's power generation dataset.",
+    )
+    optimize_parser.add_argument(
+        "--output-directory",
+        default=DEFAULT_OUTPUT_DIRECTORY,
+        help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
     )
 
     # TODO: Produce visuals
@@ -377,7 +688,37 @@ def main():
         else:
             download_state_solar_data(args.directory, State.from_str(args.state))
     elif args.command == Command.OPTIMIZE:
-        pass
+        if not State.valid(args.state):
+            print(
+                f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
+            )
+            return
+        if os.path.exists(args.output_directory) and not os.path.isdir(
+            args.output_directory
+        ):
+            print(
+                f"Output directory '{args.output_directory}' exists but is not a directory"
+            )
+            return
+
+        if not os.path.exists(args.output_directory):
+            os.makedirs(args.output_directory)
+            print(f"Created directory: {args.output_directory}")
+
+        state = State.from_str(args.state)
+        sol_df = read_plant_csv(args.directory, state, args.file)
+        sol_metadata = metadata_from_filename(state, args.file)
+
+        optimize_df = compute_optimal_power_across_loads(
+            solar_cost=200_000,
+            battery_cost=200_000,
+            load_costs=list(10_000 * 10 ** np.arange(0, 0.2, 0.1)),
+            load=1.0,
+            sol=(
+                sol_df["power_mw"] / sol_metadata[DatasetColumn.CAPACITY_MW]
+            ).to_numpy(),
+        )
+        optimize_df.to_csv(f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv")
     elif args.command == Command.PLOT:
         if args.kind == "map":
             if args.state == "":

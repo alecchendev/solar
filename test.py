@@ -1,13 +1,16 @@
 import unittest
 
+import numpy as np
+
 from solar import (
     Command,
     DataType,
     DatasetColumn,
     PvType,
     State,
+    filename_from_dict,
     metadata_from_filename,
-    solar_filename,
+    uptime_with_battery_with_inputs,
 )
 
 
@@ -55,13 +58,19 @@ class TestState(unittest.TestCase):
         self.assertEqual(metadata[DatasetColumn.WEATHER_YEAR], 2006)
         self.assertEqual(metadata[DatasetColumn.CAPACITY_MW], 103)
         self.assertEqual(metadata[DatasetColumn.TIME_INTERVAL_MIN], 5)
-        self.assertEqual(solar_filename(**metadata), example_filename)
+        self.assertEqual(filename_from_dict(metadata), example_filename)
 
         example_float_cap_filename = "DA_43.05_-114.85_2006_UPV_0.2MW_60_Min.csv"
         metadata_float_cap = metadata_from_filename(
             State.IOWA, example_float_cap_filename
         )
         self.assertEqual(metadata_float_cap[DatasetColumn.CAPACITY_MW], 0.2)
+
+    def test_no_battery_no_uptime(self):
+        no_battery_example = uptime_with_battery_with_inputs(
+            1, np.array([0]), np.array([10]), np.array([20, 20])
+        )
+        self.assertEqual(no_battery_example.iloc[0]["uptime"], 0.0)
 
 
 if __name__ == "__main__":
