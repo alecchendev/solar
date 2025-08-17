@@ -1,16 +1,23 @@
 import argparse
 import io
 import os
+from typing import Any
 import zipfile
 from enum import Enum
 
 import requests
+import pandas as pd
 
-DATA_DIR = "data"
+
+class StringEnum(str, Enum):
+    """Enum for defining a group of string constants."""
+
+    def __str__(self) -> str:
+        return self.value
 
 
 # Note: no Alaska or Hawaii
-class State(Enum):
+class State(StringEnum):
     ALABAMA = "al"
     ARKANSAS = "ar"
     ARIZONA = "az"
@@ -91,6 +98,9 @@ class State(Enum):
         return [state.value for state in cls]
 
 
+# Download
+
+
 def state_solar_zip_filename(state: str) -> str:
     return f"{state}-pv-2006.zip"
 
@@ -133,8 +143,93 @@ def download_all_solar_data(directory: str, skip_existing: bool = True):
         download_state_solar_data(directory, state)
 
 
-def add(a: int, b: int) -> int:
-    return a + b
+# File metadata
+
+
+class DataType(StringEnum):
+    ACTUAL = "Actual"  # Real power output
+    DA = "DA"  # Day ahead forecast
+    HA4 = "HA4"  # 4 hour ahead forecast
+
+
+class PvType(StringEnum):
+    UPV = "UPV"  # Utility scale PV
+    DPV = "DPV"  # Distributed PV
+
+
+class DatasetColumn(StringEnum):
+    STATE = "state"
+    DATA_TYPE = "data_type"
+    LATITUDE = "latitude"
+    LONGITUDE = "longitude"
+    WEATHER_YEAR = "weather_year"
+    PV_TYPE = "pv_type"
+    CAPACITY_MW = "capacity_mw"
+    TIME_INTERVAL_MIN = "time_interval_min"
+
+
+def solar_filename(
+    data_type: DataType,
+    latitude: float,
+    longitude: float,
+    weather_year: int,
+    pv_type: PvType,
+    capacity_mw: float,
+    time_interval_min: int,
+) -> str:
+    return f"{data_type}_{round(latitude, 2)}_{round(longitude, 2)}_{weather_year}_{pv_type}_{int(capacity_mw) if capacity_mw.is_integer() else capacity_mw}MW_{time_interval_min}_Min.csv"
+
+
+def filename_from_dict(d: dict[str, Any]) -> str:
+    return solar_filename(
+        **{str(col): d[col] for col in DatasetColumn if col != DatasetColumn.STATE}
+    )
+
+
+def metadata_from_filename(state: State, filename: str) -> dict[str, Any]:
+    name = filename.removesuffix(".csv")
+    parts = name.split("_")
+    assert len(parts) == 8  # 8 because of "5_Min" being two parts
+    (
+        data_type_str,
+        lat_str,
+        lon_str,
+        year_str,
+        pv_type_str,
+        capacity_str,
+        interval_val,
+        interval_label,
+    ) = parts
+    assert interval_label == "Min"
+    return {
+        DatasetColumn.STATE: state,
+        DatasetColumn.DATA_TYPE: DataType(data_type_str),
+        DatasetColumn.LATITUDE: float(lat_str),
+        DatasetColumn.LONGITUDE: float(lon_str),
+        DatasetColumn.WEATHER_YEAR: int(year_str),
+        DatasetColumn.PV_TYPE: PvType(pv_type_str),
+        DatasetColumn.CAPACITY_MW: float(capacity_str[:-2]),  # chop the MW off "5MW"
+        DatasetColumn.TIME_INTERVAL_MIN: int(interval_val),
+    }
+
+
+def create_state_files_df(directory: str) -> pd.DataFrame:
+    rows = []
+    for state in State:
+        assert check_downloaded(directory, state)
+        files = os.listdir(state_data_dir(directory, state.value))
+        state_rows = [metadata_from_filename(state, file) for file in files]
+        rows += state_rows
+    return pd.DataFrame(rows)
+
+
+class Command(StringEnum):
+    DOWNLOAD = "download"
+    OPTIMIZE = "optimize"
+    PLOT = "plot"
+
+
+DEFAULT_DATA_DIRECTORY = "data"
 
 
 def main():
@@ -144,7 +239,7 @@ def main():
     subparsers = parser.add_subparsers(title="commands", dest="command")
 
     download_parser = subparsers.add_parser(
-        "download", help="Download state solar datasets"
+        Command.DOWNLOAD, help="Download state solar datasets"
     )
     download_parser.add_argument(
         "--state", default="", help="Download data for specific state (abbreviation)"
@@ -154,18 +249,33 @@ def main():
     )
     download_parser.add_argument(
         "--directory",
-        default=DATA_DIR,
-        help=f"Directory to download data to. Defaults to {DATA_DIR}",
+        default=DEFAULT_DATA_DIRECTORY,
+        help=f"Directory to download data to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
     )
 
     # TODO: Produce optimal configurations
     subparsers.add_parser(
-        "optimize",
+        Command.OPTIMIZE,
         help="Produce optimal array and battery sizes for a range of load costs",
     )
 
     # TODO: Produce visuals
-    subparsers.add_parser("plot", help="Visualize preset plots for datasets")
+    plot_parser = subparsers.add_parser(
+        Command.PLOT, help="Visualize preset plots for datasets"
+    )
+    plot_parser.add_argument(
+        "--kind",
+        required=True,
+        help=f"",
+    )
+    plot_parser.add_argument(
+        "--state", default="", help="Which state to plot a map of solar plants."
+    )
+    plot_parser.add_argument(
+        "--directory",
+        default=DEFAULT_DATA_DIRECTORY,
+        help=f"Directory to download data to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+    )
 
     # TODO: everything (optimize for a state's average plant, not literally every single one)
     subparsers.add_parser(
@@ -174,18 +284,25 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "download":
+    if args.command == Command.DOWNLOAD:
         if args.all == (args.state != ""):
             print("Error: Please specify either --state or --all")
-            return
-        if args.all:
+        elif args.all:
             download_all_solar_data(args.directory)
-            return
-        if not State.valid(args.state):
+        elif not State.valid(args.state):
             print(
                 f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
             )
-        download_state_solar_data(args.directory, State.from_str(args.state))
+        else:
+            download_state_solar_data(args.directory, State.from_str(args.state))
+    elif args.command == Command.OPTIMIZE:
+        pass
+    elif args.command == Command.PLOT:
+        if args.kind == "map":
+            if args.state == "":
+                print("Error: Please specify --state to plot")
+            else:
+                pass
 
 
 if __name__ == "__main__":
