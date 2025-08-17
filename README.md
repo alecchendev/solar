@@ -5,7 +5,7 @@ Usage
     - `python3 -m venv venv`
     - `source venv/bin/activate` or whichever works for your shell, e.g. `source venv/bin/activate.fish`
 - Install dependencies
-    - `pip install -r requirements.txt`
+    - `python3 -m pip install -r requirements.txt`
 - Run script
     - `python3 solar.py`
 - Run tests

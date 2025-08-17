@@ -7,6 +7,7 @@ from enum import Enum
 
 import requests
 import pandas as pd
+import folium
 
 
 class StringEnum(str, Enum):
@@ -222,6 +223,86 @@ def create_state_files_df(directory: str) -> pd.DataFrame:
         rows += state_rows
     return pd.DataFrame(rows)
 
+# Plot state maps
+
+US_STATE_CENTERS = {
+    State.ALABAMA: (32.7794, -86.8287),
+    State.ARKANSAS: (34.7990, -92.3747),
+    State.ARIZONA: (34.2744, -111.2847),
+    State.CALIFORNIA: (36.7783, -119.4179),
+    State.COLORADO: (39.0646, -105.3272),
+    State.CONNECTICUT: (41.5834, -72.7622),
+    State.DELAWARE: (39.1612, -75.5264),
+    State.FLORIDA: (27.7663, -81.6868),
+    State.GEORGIA: (32.9866, -83.6487),
+    State.IDAHO: (44.2394, -114.5103),
+    State.ILLINOIS: (40.3363, -89.0022),
+    State.INDIANA: (39.8647, -86.2604),
+    State.IOWA: (42.0046, -93.2140),
+    State.KANSAS: (38.5111, -96.8005),
+    State.KENTUCKY: (37.6690, -84.6514),
+    State.LOUISIANA: (31.1801, -91.8749),
+    State.MAINE: (44.6074, -69.3977),
+    State.MARYLAND: (39.0724, -76.7902),
+    State.MASSACHUSETTS: (42.2373, -71.5314),
+    State.MICHIGAN: (43.3504, -84.5603),
+    State.MINNESOTA: (45.7326, -93.9196),
+    State.MISSISSIPPI: (32.7673, -89.6812),
+    State.MISSOURI: (38.4623, -92.302),
+    State.MONTANA: (47.0527, -110.2148),
+    State.NEBRASKA: (41.1289, -98.2883),
+    State.NEVADA: (38.4199, -117.1219),
+    State.NEW_HAMPSHIRE: (43.4108, -71.5653),
+    State.NEW_JERSEY: (40.314, -74.5089),
+    State.NEW_MEXICO: (34.8375, -106.2371),
+    State.NEW_MEXICO_EAST: (34.8375, -103.0),
+    State.NEW_YORK: (42.9538, -75.5268),
+    State.NORTH_CAROLINA: (35.6411, -79.8431),
+    State.OHIO: (40.3963, -82.7755),
+    State.OKLAHOMA: (35.5376, -96.9247),
+    State.OREGON: (44.5672, -122.1269),
+    State.PENNSYLVANIA: (40.590752, -77.209755),
+    State.RHODE_ISLAND: (41.6772, -71.5101),
+    State.SOUTH_CAROLINA: (33.8191, -80.9066),
+    State.SOUTH_DAKOTA: (44.2853, -99.4632),
+    State.TENNESSEE: (35.7449, -86.7489),
+    State.TEXAS: (31.106, -97.6475),
+    State.TEXAS_EAST: (31.106, -94.0),
+    State.UTAH: (40.1135, -111.8535),
+    State.VERMONT: (44.0407, -72.7093),
+    State.VIRGINIA: (37.768, -78.2057),
+    State.WASHINGTON: (47.3917, -121.5708),
+    State.WEST_VIRGINIA: (38.468, -80.9696),
+    State.WISCONSIN: (44.2563, -89.6385),
+    State.WYOMING: (42.7475, -107.2085),
+}
+
+
+def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
+    """Create a folium map showing solar plant locations for a state"""
+    center = US_STATE_CENTERS[state]
+    actual_state_df = files_df.loc[
+        (files_df[DatasetColumn.DATA_TYPE] == DataType.ACTUAL)
+        & (files_df[DatasetColumn.STATE] == state)
+    ]
+
+    m = folium.Map(location=center, zoom_start=7)
+    coordinates = zip(
+        actual_state_df[DatasetColumn.LATITUDE],
+        actual_state_df[DatasetColumn.LONGITUDE],
+    )
+    for i, (lat, lon) in enumerate(coordinates):
+        folium.Marker(
+            [lat, lon],
+            popup=f"Point {i + 1}: ({lat}, {lon})",
+            icon=folium.Icon(color="red", icon="info-sign"),
+        ).add_to(m)
+
+    filename = f"{state}_map.html"
+    m.save(filename)
+    return filename
+
+# Main CLI
 
 class Command(StringEnum):
     DOWNLOAD = "download"
@@ -301,8 +382,17 @@ def main():
         if args.kind == "map":
             if args.state == "":
                 print("Error: Please specify --state to plot")
+            elif not State.valid(args.state):
+                print(
+                    f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
+                )
             else:
-                pass
+                state = State.from_str(args.state)
+                files_df = create_state_files_df(args.directory)
+                filename = plot_state_map(files_df, state)
+                print(
+                    f"Map saved to file://{os.path.abspath(filename)} - open in browser to view (or run `open {filename}`)"
+                )
 
 
 if __name__ == "__main__":
