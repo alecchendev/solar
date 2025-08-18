@@ -806,6 +806,18 @@ def main():
         help="The filename for the plant's power generation dataset.",
     )
     optimize_parser.add_argument(
+        "--solar-cost",
+        type=float,
+        default=200_000,
+        help=f"$/MW used for solar cost in the optimization. Defaults to `200,000`",
+    )
+    optimize_parser.add_argument(
+        "--battery-cost",
+        type=float,
+        default=200_000,
+        help=f"$/MWh used for battery cost in the optimization. Defaults to `200,000`",
+    )
+    optimize_parser.add_argument(
         "--output-directory",
         default=DEFAULT_OUTPUT_DIRECTORY,
         help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
@@ -870,8 +882,8 @@ def main():
         sol_metadata = metadata_from_filename(state, args.file)
 
         optimize_df = compute_optimal_power_across_loads(
-            solar_cost=200_000,
-            battery_cost=200_000,
+            solar_cost=args.solar_cost,
+            battery_cost=args.battery_cost,
             load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
             load=1.0,
             sol=(
