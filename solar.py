@@ -422,7 +422,7 @@ def find_minimum_system_cost_parallel(
     battery_size = battery_dim / 2  # start search from 0 to battery_dim
     array_density = 1.0
     battery_density = 1.0
-    n_steps = 5
+    n_steps = 4
 
     min_cost = None
     best_row = None
@@ -459,10 +459,10 @@ def find_minimum_system_cost_parallel(
         array_size = best_row["array_size"]
         assert min_cost >= 0
 
-        array_dim /= 2
-        battery_dim /= 2
-        array_density /= 2
-        battery_density /= 2
+        array_dim /= 10
+        battery_dim /= 10
+        array_density /= 10
+        battery_density /= 10
 
     assert min_cost is not None
     assert best_row is not None
@@ -490,6 +490,148 @@ def find_minimum_system_cost_parallel(
     }
 
 
+def cost_and_elasticity(
+    solar_cost: float,
+    battery_cost: float,
+    load_cost: float,
+    battery_size: float,
+    array_size: float,
+    sol: np.ndarray,
+) -> tuple[float, float, float, float, float]:
+    """
+    Computes cost and elasticity (partial derivatives) for battery and array sizes.
+    
+    Returns:
+        (cost, cost_battery_perturbed, cost_array_perturbed, battery_elasticity, array_elasticity)
+    """
+    # Base cost
+    cost = all_in_system_cost_single(
+        solar_cost, battery_cost, load_cost, battery_size, array_size, sol
+    )
+    
+    # Perturbed costs for elasticity calculation
+    cost_battery = all_in_system_cost_single(
+        solar_cost, battery_cost, load_cost, 
+        1.01 * battery_size + 0.01, array_size, sol
+    )
+    
+    cost_array = all_in_system_cost_single(
+        solar_cost, battery_cost, load_cost, 
+        battery_size, 1.01 * array_size + 0.01, sol
+    )
+    
+    # Calculate elasticities (relative change in cost)
+    battery_elasticity = (cost - cost_battery) / cost if cost != 0 else 0
+    array_elasticity = (cost - cost_array) / cost if cost != 0 else 0
+    
+    return cost, cost_battery, cost_array, battery_elasticity, array_elasticity
+
+
+def all_in_system_cost_single(
+    solar_cost: float,
+    battery_cost: float, 
+    load_cost: float,
+    battery_size: float,
+    array_size: float,
+    sol: np.ndarray,
+) -> float:
+    """Single point version of all_in_system_cost for scalar inputs"""
+    load = 1.0  # normalized load
+    result = uptime_with_battery_with_inputs(
+        load, np.array([battery_size]), np.array([array_size]), sol
+    )
+    
+    if len(result) == 0:
+        return float('inf')
+        
+    utilization = result.iloc[0]["utilization"]
+    if utilization == 0:
+        return float('inf')
+        
+    return (battery_size * battery_cost + solar_cost * array_size + load_cost) / utilization
+
+
+def find_minimum_system_cost_gradient(
+    solar_cost: float,
+    battery_cost: float,
+    load_cost: float,
+    sol: np.ndarray,
+) -> dict[str, Any]:
+    """
+    Gradient-based optimization version that mirrors the Mathematica implementation.
+    Uses elasticity to guide the search direction.
+    """
+    # Initial guesses based on load cost
+    battery_initial = min(10.0, 10.0 * load_cost / 5_000_000)
+    array_initial = min(10.0, 1.0 + 9.0 * load_cost / 5_000_000)
+    
+    # Amplitude for step size
+    amp = 100 + 700.0 * (load_cost / 5_000_000) ** 1
+    
+    # Special case adjustments (matching Mathematica logic)
+    if 700_000 < load_cost < 1_300_000:
+        amp *= 3
+    if load_cost > 80_000_000:
+        amp *= 0.5
+        
+    steps = 10
+    cost_min = 1e10
+    battery_min = battery_initial
+    array_min = array_initial
+    
+    battery_current = battery_initial
+    array_current = array_initial
+    
+    for i in range(steps):
+        # Calculate cost and elasticity
+        cost, cost_b, cost_a, battery_elast, array_elast = cost_and_elasticity(
+            solar_cost, battery_cost, load_cost, 
+            battery_current, array_current, sol
+        )
+        
+        # Update minimum if we found a better solution
+        if cost < cost_min:
+            array_min = array_current
+            battery_min = battery_current
+            cost_min = cost
+            
+        # Update positions using elasticity as gradient
+        # Random factor between 0.1 and 1.0 for exploration
+        random_factor_b = np.random.uniform(0.1, 1.0)
+        random_factor_a = np.random.uniform(0.1, 1.0)
+        
+        battery_current = max(0.0, battery_current + amp * random_factor_b * battery_elast)
+        array_current = max(0.01, array_current + amp * random_factor_a * array_elast)
+    
+    # Calculate final utilization for the optimal solution
+    load = 1.0
+    final_result = uptime_with_battery_with_inputs(
+        load, np.array([battery_min]), np.array([array_min]), sol
+    )
+    final_uptime = final_result.iloc[0]["uptime"]
+    final_utilization = final_result.iloc[0]["utilization"]
+    
+    # Return in the same format as the other optimization function
+    return {
+        OptimizeColumn.SOLAR_COST_MW: solar_cost,
+        OptimizeColumn.BATTERY_COST_MWH: battery_cost,
+        OptimizeColumn.LOAD_COST_MW: load_cost,
+        OptimizeColumn.ARRAYSIZE_MW: array_min,
+        OptimizeColumn.BATTERY_SIZE_MWH: battery_min,
+        OptimizeColumn.LOAD_SIZE_MW: load,
+        OptimizeColumn.ARRAY_COST: solar_cost * array_min,
+        OptimizeColumn.BATTERY_COST: battery_cost * battery_min,
+        OptimizeColumn.LOAD_COST_NORMALIZED: load_cost,
+        OptimizeColumn.TOTAL_POWER_SYSTEM_COST: solar_cost * array_min + battery_cost * battery_min,
+        OptimizeColumn.TOTAL_SYSTEM_COST: solar_cost * array_min + battery_cost * battery_min + load_cost,
+        OptimizeColumn.TOTAL_SYSTEM_COST_PER_UTILIZATION: cost_min,
+        OptimizeColumn.BATTERY_SIZE_RELATIVE: battery_min / array_min,
+        OptimizeColumn.LOAD_SIZE_RELATIVE: load / array_min,
+        OptimizeColumn.ANNUAL_BATTERY_UTILIZATION: final_uptime,
+        OptimizeColumn.ANNUAL_LOAD_UTILIZATION: final_utilization,
+    }
+
+
 def compute_optimal_power_across_loads(
     solar_cost: float,
     battery_cost: float,
@@ -501,6 +643,24 @@ def compute_optimal_power_across_loads(
         [
             find_minimum_system_cost_parallel(
                 solar_cost, battery_cost, load_cost, load, sol
+            )
+            for load_cost in load_costs
+        ]
+    )
+
+
+def compute_optimal_power_across_loads_gradient(
+    solar_cost: float,
+    battery_cost: float,
+    load_costs: list[float],
+    load: float,
+    sol: np.ndarray,
+) -> pd.DataFrame:
+    """Version using the gradient-based optimization"""
+    return pd.DataFrame(
+        [
+            find_minimum_system_cost_gradient(
+                solar_cost, battery_cost, load_cost, sol
             )
             for load_cost in load_costs
         ]
@@ -712,7 +872,7 @@ def main():
         optimize_df = compute_optimal_power_across_loads(
             solar_cost=200_000,
             battery_cost=200_000,
-            load_costs=list(10_000 * 10 ** np.arange(0, 0.2, 0.1)),
+            load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
             load=1.0,
             sol=(
                 sol_df["power_mw"] / sol_metadata[DatasetColumn.CAPACITY_MW]
