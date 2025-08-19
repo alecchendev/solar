@@ -2,7 +2,7 @@ import argparse
 import io
 import os
 from os.path import isdir, isfile
-from typing import Any
+from typing import Any, Optional
 import zipfile
 from enum import Enum
 
@@ -831,6 +831,34 @@ def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
     plt.savefig(output_filepath)
 
 
+def plot_power_cost_per_energy_by_load_cost_locations(
+    dfs: list[tuple[str, pd.DataFrame]], output_filepath: str
+):
+    for location, df in dfs:
+        utilization = df["annual load utilization"]
+        load_cost = df["load cost $ (all normalized to 1 MW)"]
+        power_cost = df["total power system cost $"]
+        plt.scatter(load_cost, power_cost / (10 * 8760 * utilization), label=location)
+
+    plt.title(
+        "How much does the power system cost per energy across different load costs + locations?"
+    )
+    plt.xlabel("Load capex ($/MW)")
+    plt.ylabel("Power system capex ($/MWh-load over 10 years)")
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.legend()
+    plt.savefig(output_filepath)
+
+
+def plot_power_cost_per_energy_by_load_cost(
+    location: str, output_df: pd.DataFrame, output_filepath: str
+):
+    plot_power_cost_per_energy_by_load_cost_locations(
+        [(location, output_df)], output_filepath
+    )
+
+
 # Plotting TODO:
 # - File meta data
 #   - Plot histogram of capacities for a state
@@ -852,6 +880,7 @@ class PlotKind(StringEnum):
     SUB_COST_BY_LOAD_COST = "sub-cost-by-load-cost"
     POWER_COST_PER_ENERGY_BY_UTIL = "power-cost-by-util"
     UTIL_BY_COST = "util-by-cost"
+    POWER_COST_PER_ENERGY_BY_LOAD_COST = "power-cost-by-load-cost"
 
 
 DEFAULT_DATA_DIRECTORY = "data"
@@ -964,7 +993,7 @@ def main():
     # Plot - power cost by util
     plot_power_cost_by_util_parser = plot_subparsers.add_parser(
         PlotKind.POWER_COST_PER_ENERGY_BY_UTIL,
-        help="Plot cost of power system components by optimal utilization.",
+        help="Plot cost of power system components per energy by optimal utilization.",
     )
     plot_power_cost_by_util_parser.add_argument(
         "--input", required=True, help="A CSV file produced by the `optimize` command."
@@ -981,6 +1010,23 @@ def main():
         "--input", required=True, help="A CSV file produced by the `optimize` command."
     )
     plot_util_by_cost_parser.add_argument(
+        "--output", default=DEFAULT_OUTPUT_PLOT, help="Where to save the plot."
+    )
+
+    # Plot - power cost per energy by load cost
+    plot_power_cost_per_energy_by_load_cost_parser = plot_subparsers.add_parser(
+        PlotKind.POWER_COST_PER_ENERGY_BY_LOAD_COST,
+        help="Plot power cost per energy usage by load cost.",
+    )
+    plot_power_cost_per_energy_by_load_cost_parser.add_argument(
+        "--state",
+        required=True,
+        help="Which state is being plotted. Used to label the plot.",
+    )
+    plot_power_cost_per_energy_by_load_cost_parser.add_argument(
+        "--input", required=True, help="A CSV file produced by the `optimize` command."
+    )
+    plot_power_cost_per_energy_by_load_cost_parser.add_argument(
         "--output", default=DEFAULT_OUTPUT_PLOT, help="Where to save the plot."
     )
 
@@ -1076,6 +1122,19 @@ def main():
             else:
                 df = pd.read_csv(args.input)
                 plot_utilization_by_load_cost(df, args.output)
+                print(f"Plot successfully saved to {args.output}.")
+        elif args.plot_kind == PlotKind.POWER_COST_PER_ENERGY_BY_LOAD_COST:
+            if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
+                print(f"Error: {args.input} is not a valid input file.")
+            elif not State.valid(args.state):
+                print(
+                    f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
+                )
+            else:
+                df = pd.read_csv(args.input)
+                plot_power_cost_per_energy_by_load_cost(
+                    State.from_str(args.state).full_name(), df, args.output
+                )
                 print(f"Plot successfully saved to {args.output}.")
         else:
             plot_parser.print_help()
