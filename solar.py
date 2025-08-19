@@ -751,6 +751,30 @@ def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
     return filename
 
 
+def plot_power_cost_by_utilization(df: pd.DataFrame, output_filepath: str):
+    utilization = df["annual load utilization"]
+    solar_cost = df["array cost $"]
+    battery_cost = df["battery cost $"]
+    power_cost = df["total power system cost $"]
+
+    u_values = np.arange(0.08, utilization.iloc[0] + 0.001, 0.001)
+    v_values = np.full(len(u_values), solar_cost.iloc[0]) / (10 * 8760 * u_values)
+
+    plt.plot(utilization, solar_cost / (10 * 8760 * utilization), label="Solar")
+    plt.plot(utilization, battery_cost / (10 * 8760 * utilization), label="Battery")
+    plt.plot(
+        utilization, power_cost / (10 * 8760 * utilization), label="Total Power System"
+    )
+    plt.plot(u_values, v_values, label="Under-utilized solar")
+
+    plt.title("What is the cost of the power system across varying load costs?")
+    plt.xlabel("Load utilization")
+    plt.ylabel("$/MWh when used")
+    plt.xlim([0, 1])
+    plt.legend()
+    plt.savefig(output_filepath)
+
+
 def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
     utilization = df["annual load utilization"]
     load_cost = df["load cost $ (all normalized to 1 MW)"]
@@ -779,6 +803,7 @@ class Command(StringEnum):
 
 class PlotKind(StringEnum):
     MAP = "map"
+    POWER_COST_BY_UTIL = "power-cost-by-util"
     UTIL_BY_COST = "util-by-cost"
 
 
@@ -794,6 +819,7 @@ def main():
     )
     subparsers = parser.add_subparsers(title="commands", dest="command")
 
+    # Download
     download_parser = subparsers.add_parser(
         Command.DOWNLOAD, help="Download state solar datasets"
     )
@@ -809,7 +835,7 @@ def main():
         help=f"Directory to download data to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
     )
 
-    # TODO: Produce optimal configurations
+    # Optimize
     optimize_parser = subparsers.add_parser(
         Command.OPTIMIZE,
         help="Produce optimal array and battery sizes for a range of load costs",
@@ -845,12 +871,13 @@ def main():
         help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
     )
 
-    # TODO: Produce visuals
+    # Plot
     plot_parser = subparsers.add_parser(
         Command.PLOT, help="Visualize preset plots for datasets."
     )
     plot_subparsers = plot_parser.add_subparsers(title="plot kinds", dest="plot_kind")
 
+    # Plot - map
     plot_map_parser = plot_subparsers.add_parser(
         PlotKind.MAP, help="Plot solar plants for a state geographically."
     )
@@ -860,9 +887,22 @@ def main():
     plot_map_parser.add_argument(
         "--directory",
         default=DEFAULT_DATA_DIRECTORY,
-        help=f"Used in `map` plot kind. Directory data was download to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+        help=f"Used in `map` plot kind. Directory data was download to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",  # Expects data directory to be structured as this tool downloads data
     )
 
+    # Plot - power cost by util
+    plot_power_cost_by_util_parser = plot_subparsers.add_parser(
+        PlotKind.POWER_COST_BY_UTIL,
+        help="Plot cost of power system components by optimal utilization.",
+    )
+    plot_power_cost_by_util_parser.add_argument(
+        "--input", required=True, help="A CSV file produced by the `optimize` command."
+    )
+    plot_power_cost_by_util_parser.add_argument(
+        "--output", default=DEFAULT_OUTPUT_PLOT, help="Where to save the plot."
+    )
+
+    # Plot - util by cost
     plot_util_by_cost_parser = plot_subparsers.add_parser(
         PlotKind.UTIL_BY_COST, help="Plot optimal utilization by load cost."
     )
@@ -938,6 +978,13 @@ def main():
                 print(
                     f"Map saved to file://{os.path.abspath(filename)} - open in browser to view (or run `open {filename}`)"
                 )
+        elif args.plot_kind == PlotKind.POWER_COST_BY_UTIL:
+            if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
+                print(f"Error: {args.input} is not a valid input file.")
+            else:
+                df = pd.read_csv(args.input)
+                plot_power_cost_by_utilization(df, args.output)
+                print(f"Plot successfully saved to {args.output}.")
         elif args.plot_kind == PlotKind.UTIL_BY_COST:
             if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
                 print(f"Error: {args.input} is not a valid input file.")
@@ -945,7 +992,8 @@ def main():
                 df = pd.read_csv(args.input)
                 plot_utilization_by_load_cost(df, args.output)
                 print(f"Plot successfully saved to {args.output}.")
-
+        else:
+            plot_parser.print_help()
     else:
         parser.print_help()
 
