@@ -6,6 +6,7 @@ from solar import (
     Command,
     DataType,
     DatasetColumn,
+    PlotKind,
     PvType,
     State,
     filename_from_dict,
@@ -42,6 +43,7 @@ class TestState(unittest.TestCase):
         self.assertEqual(str(PvType.UPV), "UPV")
         self.assertEqual(str(DatasetColumn.STATE), "state")
         self.assertEqual(str(Command.DOWNLOAD), "download")
+        self.assertEqual(str(PlotKind.UTIL_BY_COST), "util-by-cost")
 
     def test_enums_are_strs(self):
         self.assertEqual(DatasetColumn.STATE, "state")

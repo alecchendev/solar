@@ -1,7 +1,7 @@
 import argparse
 import io
 import os
-from os.path import isdir
+from os.path import isdir, isfile
 from typing import Any
 import zipfile
 from enum import Enum
@@ -10,6 +10,7 @@ import requests
 import pandas as pd
 import folium
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 class StringEnum(str, Enum):
@@ -500,7 +501,7 @@ def cost_and_elasticity(
 ) -> tuple[float, float, float, float, float]:
     """
     Computes cost and elasticity (partial derivatives) for battery and array sizes.
-    
+
     Returns:
         (cost, cost_battery_perturbed, cost_array_perturbed, battery_elasticity, array_elasticity)
     """
@@ -508,28 +509,26 @@ def cost_and_elasticity(
     cost = all_in_system_cost_single(
         solar_cost, battery_cost, load_cost, battery_size, array_size, sol
     )
-    
+
     # Perturbed costs for elasticity calculation
     cost_battery = all_in_system_cost_single(
-        solar_cost, battery_cost, load_cost, 
-        1.01 * battery_size + 0.01, array_size, sol
+        solar_cost, battery_cost, load_cost, 1.01 * battery_size + 0.01, array_size, sol
     )
-    
+
     cost_array = all_in_system_cost_single(
-        solar_cost, battery_cost, load_cost, 
-        battery_size, 1.01 * array_size + 0.01, sol
+        solar_cost, battery_cost, load_cost, battery_size, 1.01 * array_size + 0.01, sol
     )
-    
+
     # Calculate elasticities (relative change in cost)
     battery_elasticity = (cost - cost_battery) / cost if cost != 0 else 0
     array_elasticity = (cost - cost_array) / cost if cost != 0 else 0
-    
+
     return cost, cost_battery, cost_array, battery_elasticity, array_elasticity
 
 
 def all_in_system_cost_single(
     solar_cost: float,
-    battery_cost: float, 
+    battery_cost: float,
     load_cost: float,
     battery_size: float,
     array_size: float,
@@ -540,15 +539,17 @@ def all_in_system_cost_single(
     result = uptime_with_battery_with_inputs(
         load, np.array([battery_size]), np.array([array_size]), sol
     )
-    
+
     if len(result) == 0:
-        return float('inf')
-        
+        return float("inf")
+
     utilization = result.iloc[0]["utilization"]
     if utilization == 0:
-        return float('inf')
-        
-    return (battery_size * battery_cost + solar_cost * array_size + load_cost) / utilization
+        return float("inf")
+
+    return (
+        battery_size * battery_cost + solar_cost * array_size + load_cost
+    ) / utilization
 
 
 def find_minimum_system_cost_gradient(
@@ -564,45 +565,46 @@ def find_minimum_system_cost_gradient(
     # Initial guesses based on load cost
     battery_initial = min(10.0, 10.0 * load_cost / 5_000_000)
     array_initial = min(10.0, 1.0 + 9.0 * load_cost / 5_000_000)
-    
+
     # Amplitude for step size
     amp = 100 + 700.0 * (load_cost / 5_000_000) ** 1
-    
+
     # Special case adjustments (matching Mathematica logic)
     if 700_000 < load_cost < 1_300_000:
         amp *= 3
     if load_cost > 80_000_000:
         amp *= 0.5
-        
+
     steps = 10
     cost_min = 1e10
     battery_min = battery_initial
     array_min = array_initial
-    
+
     battery_current = battery_initial
     array_current = array_initial
-    
+
     for i in range(steps):
         # Calculate cost and elasticity
         cost, cost_b, cost_a, battery_elast, array_elast = cost_and_elasticity(
-            solar_cost, battery_cost, load_cost, 
-            battery_current, array_current, sol
+            solar_cost, battery_cost, load_cost, battery_current, array_current, sol
         )
-        
+
         # Update minimum if we found a better solution
         if cost < cost_min:
             array_min = array_current
             battery_min = battery_current
             cost_min = cost
-            
+
         # Update positions using elasticity as gradient
         # Random factor between 0.1 and 1.0 for exploration
         random_factor_b = np.random.uniform(0.1, 1.0)
         random_factor_a = np.random.uniform(0.1, 1.0)
-        
-        battery_current = max(0.0, battery_current + amp * random_factor_b * battery_elast)
+
+        battery_current = max(
+            0.0, battery_current + amp * random_factor_b * battery_elast
+        )
         array_current = max(0.01, array_current + amp * random_factor_a * array_elast)
-    
+
     # Calculate final utilization for the optimal solution
     load = 1.0
     final_result = uptime_with_battery_with_inputs(
@@ -610,7 +612,7 @@ def find_minimum_system_cost_gradient(
     )
     final_uptime = final_result.iloc[0]["uptime"]
     final_utilization = final_result.iloc[0]["utilization"]
-    
+
     # Return in the same format as the other optimization function
     return {
         OptimizeColumn.SOLAR_COST_MW: solar_cost,
@@ -622,8 +624,11 @@ def find_minimum_system_cost_gradient(
         OptimizeColumn.ARRAY_COST: solar_cost * array_min,
         OptimizeColumn.BATTERY_COST: battery_cost * battery_min,
         OptimizeColumn.LOAD_COST_NORMALIZED: load_cost,
-        OptimizeColumn.TOTAL_POWER_SYSTEM_COST: solar_cost * array_min + battery_cost * battery_min,
-        OptimizeColumn.TOTAL_SYSTEM_COST: solar_cost * array_min + battery_cost * battery_min + load_cost,
+        OptimizeColumn.TOTAL_POWER_SYSTEM_COST: solar_cost * array_min
+        + battery_cost * battery_min,
+        OptimizeColumn.TOTAL_SYSTEM_COST: solar_cost * array_min
+        + battery_cost * battery_min
+        + load_cost,
         OptimizeColumn.TOTAL_SYSTEM_COST_PER_UTILIZATION: cost_min,
         OptimizeColumn.BATTERY_SIZE_RELATIVE: battery_min / array_min,
         OptimizeColumn.LOAD_SIZE_RELATIVE: load / array_min,
@@ -639,14 +644,15 @@ def compute_optimal_power_across_loads(
     load: float,
     sol: np.ndarray,
 ) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
+    results = []
+    for load_cost in load_costs:
+        print(f"Optimizing load cost: {load_cost}...")
+        results.append(
             find_minimum_system_cost_parallel(
                 solar_cost, battery_cost, load_cost, load, sol
             )
-            for load_cost in load_costs
-        ]
-    )
+        )
+    return pd.DataFrame([])
 
 
 def compute_optimal_power_across_loads_gradient(
@@ -659,9 +665,7 @@ def compute_optimal_power_across_loads_gradient(
     """Version using the gradient-based optimization"""
     return pd.DataFrame(
         [
-            find_minimum_system_cost_gradient(
-                solar_cost, battery_cost, load_cost, sol
-            )
+            find_minimum_system_cost_gradient(solar_cost, battery_cost, load_cost, sol)
             for load_cost in load_costs
         ]
     )
@@ -747,6 +751,17 @@ def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
     return filename
 
 
+def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
+    utilization = df["annual load utilization"]
+    load_cost = df["load cost $ (all normalized to 1 MW)"]
+    plt.plot(load_cost, utilization)
+    plt.title("What is the relationship with load cost and optimal utilization?")
+    plt.xlabel("Load capex ($/MW)")
+    plt.ylabel("Optimal utilization")
+    plt.xscale("log")
+    plt.savefig(output_filepath)
+
+
 # Plotting TODO:
 # - File meta data
 #   - Plot histogram of capacities for a state
@@ -762,8 +777,15 @@ class Command(StringEnum):
     PLOT = "plot"
 
 
+class PlotKind(StringEnum):
+    MAP = "map"
+    UTIL_BY_COST = "util-by-cost"
+
+
 DEFAULT_DATA_DIRECTORY = "data"
 DEFAULT_OUTPUT_DIRECTORY = "output"
+DEFAULT_OUTPUT_CSV = f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv"
+DEFAULT_OUTPUT_PLOT = f"{DEFAULT_OUTPUT_DIRECTORY}/output.png"
 
 
 def main():
@@ -825,20 +847,30 @@ def main():
 
     # TODO: Produce visuals
     plot_parser = subparsers.add_parser(
-        Command.PLOT, help="Visualize preset plots for datasets"
+        Command.PLOT, help="Visualize preset plots for datasets."
     )
-    plot_parser.add_argument(
-        "--kind",
-        required=True,
-        help=f"",
+    plot_subparsers = plot_parser.add_subparsers(title="plot kinds", dest="plot_kind")
+
+    plot_map_parser = plot_subparsers.add_parser(
+        PlotKind.MAP, help="Plot solar plants for a state geographically."
     )
-    plot_parser.add_argument(
-        "--state", default="", help="Which state to plot a map of solar plants."
+    plot_map_parser.add_argument(
+        "--state", required=True, help="Which state to plot a map of solar plants."
     )
-    plot_parser.add_argument(
+    plot_map_parser.add_argument(
         "--directory",
         default=DEFAULT_DATA_DIRECTORY,
-        help=f"Directory to download data to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+        help=f"Used in `map` plot kind. Directory data was download to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+    )
+
+    plot_util_by_cost_parser = plot_subparsers.add_parser(
+        PlotKind.UTIL_BY_COST, help="Plot optimal utilization by load cost."
+    )
+    plot_util_by_cost_parser.add_argument(
+        "--input", required=True, help="A CSV file produced by the `optimize` command."
+    )
+    plot_util_by_cost_parser.add_argument(
+        "--output", default=DEFAULT_OUTPUT_PLOT, help="Where to save the plot."
     )
 
     # TODO: everything (optimize for a state's average plant, not literally every single one)
@@ -890,12 +922,12 @@ def main():
                 sol_df["power_mw"] / sol_metadata[DatasetColumn.CAPACITY_MW]
             ).to_numpy(),
         )
-        optimize_df.to_csv(f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv")
+        output_filepath = f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv"
+        optimize_df.to_csv(output_filepath)
+        print(f"Optimization complete. Results saved to `{output_filepath}`")
     elif args.command == Command.PLOT:
-        if args.kind == "map":
-            if args.state == "":
-                print("Error: Please specify --state to plot")
-            elif not State.valid(args.state):
+        if args.plot_kind == PlotKind.MAP:
+            if not State.valid(args.state):
                 print(
                     f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
                 )
@@ -906,6 +938,16 @@ def main():
                 print(
                     f"Map saved to file://{os.path.abspath(filename)} - open in browser to view (or run `open {filename}`)"
                 )
+        elif args.plot_kind == PlotKind.UTIL_BY_COST:
+            if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
+                print(f"Error: {args.input} is not a valid input file.")
+            else:
+                df = pd.read_csv(args.input)
+                plot_utilization_by_load_cost(df, args.output)
+                print(f"Plot successfully saved to {args.output}.")
+
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
