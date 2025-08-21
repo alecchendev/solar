@@ -230,9 +230,14 @@ def create_state_files_df(directory: str) -> pd.DataFrame:
 # Optimization
 
 
+class PowerColumn(StringEnum):
+    LOCAL_TIME = "local_time"
+    POWER_MW = "power_mw"
+
+
 def read_plant_csv(directory: str, state: State, filename: str) -> pd.DataFrame:
     return pd.read_csv(f"{directory}/{state}/{filename}").rename(
-        columns={"LocalTime": "local_time", "Power(MW)": "power_mw"}
+        columns={"LocalTime": PowerColumn.LOCAL_TIME, "Power(MW)": PowerColumn.POWER_MW}
     )
 
 
@@ -752,12 +757,12 @@ def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
 
 
 def plot_cost_by_utilization(df: pd.DataFrame, output_filepath: str):
-    utilization = df["annual load utilization"]
-    solar_cost = df["array cost $"]
-    battery_cost = df["battery cost $"]
-    load_cost = df["load cost $ (all normalized to 1 MW)"]
-    power_cost = df["total power system cost $"]
-    total_cost = df["total system cost $"]
+    utilization = df[OptimizeColumn.ANNUAL_LOAD_UTILIZATION]
+    solar_cost = df[OptimizeColumn.ARRAY_COST]
+    battery_cost = df[OptimizeColumn.BATTERY_COST]
+    load_cost = df[OptimizeColumn.LOAD_COST_NORMALIZED]
+    power_cost = df[OptimizeColumn.TOTAL_POWER_SYSTEM_COST]
+    total_cost = df[OptimizeColumn.TOTAL_SYSTEM_COST]
     plt.plot(utilization, solar_cost, label="Solar")
     plt.plot(utilization, battery_cost, label="Battery")
     plt.plot(utilization, load_cost, label="Load")
@@ -774,12 +779,12 @@ def plot_cost_by_utilization(df: pd.DataFrame, output_filepath: str):
 
 
 def plot_sub_cost_by_load_cost(df: pd.DataFrame, output_filepath: str):
-    solar_cost = df["array cost $"]
-    battery_cost = df["battery cost $"]
-    load_cost = df["load cost $ (all normalized to 1 MW)"]
-    power_cost = df["total power system cost $"]
-    total_cost = df["total system cost $"]
-    total_cost_per_util = df["total system cost per utilization"]
+    solar_cost = df[OptimizeColumn.ARRAY_COST]
+    battery_cost = df[OptimizeColumn.BATTERY_COST]
+    load_cost = df[OptimizeColumn.LOAD_COST_NORMALIZED]
+    power_cost = df[OptimizeColumn.TOTAL_POWER_SYSTEM_COST]
+    total_cost = df[OptimizeColumn.TOTAL_SYSTEM_COST]
+    total_cost_per_util = df[OptimizeColumn.TOTAL_SYSTEM_COST_PER_UTILIZATION]
     plt.plot(load_cost, solar_cost, label="Solar")
     plt.plot(load_cost, battery_cost, label="Battery")
     plt.plot(load_cost, load_cost, label="Load")
@@ -797,10 +802,10 @@ def plot_sub_cost_by_load_cost(df: pd.DataFrame, output_filepath: str):
 
 
 def plot_power_cost_per_energy_by_utilization(df: pd.DataFrame, output_filepath: str):
-    utilization = df["annual load utilization"]
-    solar_cost = df["array cost $"]
-    battery_cost = df["battery cost $"]
-    power_cost = df["total power system cost $"]
+    utilization = df[OptimizeColumn.ANNUAL_LOAD_UTILIZATION]
+    solar_cost = df[OptimizeColumn.ARRAY_COST]
+    battery_cost = df[OptimizeColumn.BATTERY_COST]
+    power_cost = df[OptimizeColumn.TOTAL_POWER_SYSTEM_COST]
 
     u_values = np.arange(0.08, utilization.iloc[0] + 0.001, 0.001)
     v_values = np.full(len(u_values), solar_cost.iloc[0]) / (10 * 8760 * u_values)
@@ -821,8 +826,8 @@ def plot_power_cost_per_energy_by_utilization(df: pd.DataFrame, output_filepath:
 
 
 def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
-    utilization = df["annual load utilization"]
-    load_cost = df["load cost $ (all normalized to 1 MW)"]
+    utilization = df[OptimizeColumn.ANNUAL_LOAD_UTILIZATION]
+    load_cost = df[OptimizeColumn.LOAD_COST_NORMALIZED]
     plt.plot(load_cost, utilization)
     plt.title("What is the relationship with load cost and optimal utilization?")
     plt.xlabel("Load capex ($/MW)")
@@ -835,9 +840,9 @@ def plot_power_cost_per_energy_by_load_cost_locations(
     dfs: list[tuple[str, pd.DataFrame]], output_filepath: str
 ):
     for location, df in dfs:
-        utilization = df["annual load utilization"]
-        load_cost = df["load cost $ (all normalized to 1 MW)"]
-        power_cost = df["total power system cost $"]
+        utilization = df[OptimizeColumn.ANNUAL_LOAD_UTILIZATION]
+        load_cost = df[OptimizeColumn.LOAD_COST_NORMALIZED]
+        power_cost = df[OptimizeColumn.TOTAL_POWER_SYSTEM_COST]
         plt.scatter(load_cost, power_cost / (10 * 8760 * utilization), label=location)
 
     plt.title(
@@ -1076,7 +1081,7 @@ def main():
             load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
             load=1.0,
             sol=(
-                sol_df["power_mw"] / sol_metadata[DatasetColumn.CAPACITY_MW]
+                sol_df[PowerColumn.POWER_MW] / sol_metadata[DatasetColumn.CAPACITY_MW]
             ).to_numpy(),
         )
         output_filepath = f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv"
