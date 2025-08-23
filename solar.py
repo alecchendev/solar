@@ -1,8 +1,7 @@
 import argparse
 import io
 import os
-from os.path import isdir, isfile
-from typing import Any, Optional
+from typing import Any
 import zipfile
 from enum import Enum
 
@@ -415,19 +414,20 @@ class OptimizeColumn(StringEnum):
 
 
 def find_minimum_system_cost_parallel(
-    solarcost: float,
-    batterycost: float,
-    loadcost: float,
+    solar_cost: float,
+    battery_cost: float,
+    load_cost: float,
     load: float,
     sol: np.ndarray,
 ) -> dict[str, Any]:
-    # Ideally inputs = dim1, dim2, val1, val2, density (total steps in the range)
+    # Tweak these parameters to trade speed vs. optimality
     array_dim = 30.0
     battery_dim = 30.0
     array_size = array_dim / 2  # start search from 0 to array_dim
     battery_size = battery_dim / 2  # start search from 0 to battery_dim
     array_density = 1.0
     battery_density = 1.0
+    zoom_factor = 10  # how much to shrink search dim + density each step
     n_steps = 4
 
     min_cost = None
@@ -446,9 +446,9 @@ def find_minimum_system_cost_parallel(
 
         costs = uptime_with_battery_with_inputs(load, battery_sizes, array_sizes, sol)
         costs["cost"] = all_in_system_cost(
-            solarcost,
-            batterycost,
-            loadcost,
+            solar_cost,
+            battery_cost,
+            load_cost,
             costs["capacity"].to_numpy(),
             costs["load"].to_numpy(),
             costs["utilization"].to_numpy(),
@@ -465,35 +465,65 @@ def find_minimum_system_cost_parallel(
         array_size = best_row["array_size"]
         assert min_cost >= 0
 
-        array_dim /= 10
-        battery_dim /= 10
-        array_density /= 10
-        battery_density /= 10
+        array_dim /= zoom_factor
+        battery_dim /= zoom_factor
+        array_density /= zoom_factor
+        battery_density /= zoom_factor
 
     assert min_cost is not None
     assert best_row is not None
 
+    # If the optimal sizes are close to the search boundary, we should increase our
+    # space to increase the likelihood that we're getting the global optimum.
+    if best_row["battery_size"] >= battery_dim or best_row["array_size"] >= array_dim:
+        print(
+            "Warning: optimal power configuration approached search boundary,\
+        you may want to consider tweaking search dimensions."
+        )
+
     return {
-        OptimizeColumn.SOLAR_COST_MW: solarcost,
-        OptimizeColumn.BATTERY_COST_MWH: batterycost,
-        OptimizeColumn.LOAD_COST_MW: loadcost,
+        OptimizeColumn.SOLAR_COST_MW: solar_cost,
+        OptimizeColumn.BATTERY_COST_MWH: battery_cost,
+        OptimizeColumn.LOAD_COST_MW: load_cost,
         OptimizeColumn.ARRAYSIZE_MW: array_size,
         OptimizeColumn.BATTERY_SIZE_MWH: battery_size,
         OptimizeColumn.LOAD_SIZE_MW: load,
-        OptimizeColumn.ARRAY_COST: solarcost * array_size,
-        OptimizeColumn.BATTERY_COST: batterycost * battery_size,
-        OptimizeColumn.LOAD_COST_NORMALIZED: loadcost,
-        OptimizeColumn.TOTAL_POWER_SYSTEM_COST: solarcost * array_size
-        + batterycost * battery_size,
-        OptimizeColumn.TOTAL_SYSTEM_COST: solarcost * array_size
-        + batterycost * battery_size
-        + loadcost,
+        OptimizeColumn.ARRAY_COST: solar_cost * array_size,
+        OptimizeColumn.BATTERY_COST: battery_cost * battery_size,
+        OptimizeColumn.LOAD_COST_NORMALIZED: load_cost,
+        OptimizeColumn.TOTAL_POWER_SYSTEM_COST: solar_cost * array_size
+        + battery_cost * battery_size,
+        OptimizeColumn.TOTAL_SYSTEM_COST: solar_cost * array_size
+        + battery_cost * battery_size
+        + load_cost,
         OptimizeColumn.TOTAL_SYSTEM_COST_PER_UTILIZATION: min_cost,
         OptimizeColumn.BATTERY_SIZE_RELATIVE: best_row["capacity"],
         OptimizeColumn.LOAD_SIZE_RELATIVE: best_row["load"],
         OptimizeColumn.ANNUAL_BATTERY_UTILIZATION: best_row["uptime"],
         OptimizeColumn.ANNUAL_LOAD_UTILIZATION: best_row["utilization"],
     }
+
+
+def compute_optimal_power_across_loads(
+    solar_cost: float,
+    battery_cost: float,
+    load_costs: list[float],
+    load: float,
+    sol: np.ndarray,
+) -> pd.DataFrame:
+    results = []
+    for load_cost in load_costs:
+        print(f"Optimizing load cost: {load_cost}...")
+        results.append(
+            find_minimum_system_cost_parallel(
+                solar_cost, battery_cost, load_cost, load, sol
+            )
+        )
+    return pd.DataFrame(results)
+
+
+# Re-implementation of the reference mathematica notebook
+# using gradient descent for optimization
 
 
 def cost_and_elasticity(
@@ -506,55 +536,43 @@ def cost_and_elasticity(
 ) -> tuple[float, float, float, float, float]:
     """
     Computes cost and elasticity (partial derivatives) for battery and array sizes.
-
-    Returns:
-        (cost, cost_battery_perturbed, cost_array_perturbed, battery_elasticity, array_elasticity)
     """
     # Base cost
-    cost = all_in_system_cost_single(
-        solar_cost, battery_cost, load_cost, battery_size, array_size, sol
+    load = 1.0
+    perturbed_battery_size = 1.01 * battery_size + 0.01
+    perturbed_array_size = 1.01 * array_size + 0.01
+    costs = uptime_with_battery_with_inputs(
+        load,
+        np.array([battery_size, perturbed_battery_size]),
+        np.array([array_size, perturbed_array_size]),
+        sol,
     )
 
-    # Perturbed costs for elasticity calculation
-    cost_battery = all_in_system_cost_single(
-        solar_cost, battery_cost, load_cost, 1.01 * battery_size + 0.01, array_size, sol
+    costs["cost"] = all_in_system_cost(
+        solar_cost,
+        battery_cost,
+        load_cost,
+        costs["capacity"].to_numpy(),
+        costs["load"].to_numpy(),
+        costs["utilization"].to_numpy(),
     )
-
-    cost_array = all_in_system_cost_single(
-        solar_cost, battery_cost, load_cost, battery_size, 1.01 * array_size + 0.01, sol
-    )
+    cost = costs.loc[
+        (costs["battery_size"] == battery_size) & (costs["array_size"] == array_size)
+    ]["cost"].iloc[0]
+    cost_battery = costs.loc[
+        (costs["battery_size"] == perturbed_battery_size)
+        & (costs["array_size"] == array_size)
+    ]["cost"].iloc[0]
+    cost_array = costs.loc[
+        (costs["battery_size"] == battery_size)
+        & (costs["array_size"] == perturbed_array_size)
+    ]["cost"].iloc[0]
 
     # Calculate elasticities (relative change in cost)
     battery_elasticity = (cost - cost_battery) / cost if cost != 0 else 0
     array_elasticity = (cost - cost_array) / cost if cost != 0 else 0
 
     return cost, cost_battery, cost_array, battery_elasticity, array_elasticity
-
-
-def all_in_system_cost_single(
-    solar_cost: float,
-    battery_cost: float,
-    load_cost: float,
-    battery_size: float,
-    array_size: float,
-    sol: np.ndarray,
-) -> float:
-    """Single point version of all_in_system_cost for scalar inputs"""
-    load = 1.0  # normalized load
-    result = uptime_with_battery_with_inputs(
-        load, np.array([battery_size]), np.array([array_size]), sol
-    )
-
-    if len(result) == 0:
-        return float("inf")
-
-    utilization = result.iloc[0]["utilization"]
-    if utilization == 0:
-        return float("inf")
-
-    return (
-        battery_size * battery_cost + solar_cost * array_size + load_cost
-    ) / utilization
 
 
 def find_minimum_system_cost_gradient(
@@ -640,24 +658,6 @@ def find_minimum_system_cost_gradient(
         OptimizeColumn.ANNUAL_BATTERY_UTILIZATION: final_uptime,
         OptimizeColumn.ANNUAL_LOAD_UTILIZATION: final_utilization,
     }
-
-
-def compute_optimal_power_across_loads(
-    solar_cost: float,
-    battery_cost: float,
-    load_costs: list[float],
-    load: float,
-    sol: np.ndarray,
-) -> pd.DataFrame:
-    results = []
-    for load_cost in load_costs:
-        print(f"Optimizing load cost: {load_cost}...")
-        results.append(
-            find_minimum_system_cost_parallel(
-                solar_cost, battery_cost, load_cost, load, sol
-            )
-        )
-    return pd.DataFrame([])
 
 
 def compute_optimal_power_across_loads_gradient(
@@ -754,6 +754,9 @@ def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
     filename = f"{state}_map.html"
     m.save(filename)
     return filename
+
+
+# Plot optimization results
 
 
 def plot_cost_by_utilization(df: pd.DataFrame, output_filepath: str):
@@ -951,6 +954,11 @@ def main():
         default=DEFAULT_OUTPUT_DIRECTORY,
         help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
     )
+    optimize_parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="Optimize via reference re-implementation, i.e. gradient descent.",
+    )
 
     # Plot
     plot_parser = subparsers.add_parser(
@@ -1075,15 +1083,29 @@ def main():
         sol_df = read_plant_csv(args.directory, state, args.file)
         sol_metadata = metadata_from_filename(state, args.file)
 
-        optimize_df = compute_optimal_power_across_loads(
-            solar_cost=args.solar_cost,
-            battery_cost=args.battery_cost,
-            load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
-            load=1.0,
-            sol=(
-                sol_df[PowerColumn.POWER_MW] / sol_metadata[DatasetColumn.CAPACITY_MW]
-            ).to_numpy(),
-        )
+        optimize_df = pd.DataFrame()
+        if args.reference:
+            optimize_df = compute_optimal_power_across_loads_gradient(
+                solar_cost=args.solar_cost,
+                battery_cost=args.battery_cost,
+                load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
+                load=1.0,
+                sol=(
+                    sol_df[PowerColumn.POWER_MW]
+                    / sol_metadata[DatasetColumn.CAPACITY_MW]
+                ).to_numpy(),
+            )
+        else:
+            optimize_df = compute_optimal_power_across_loads(
+                solar_cost=args.solar_cost,
+                battery_cost=args.battery_cost,
+                load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
+                load=1.0,
+                sol=(
+                    sol_df[PowerColumn.POWER_MW]
+                    / sol_metadata[DatasetColumn.CAPACITY_MW]
+                ).to_numpy(),
+            )
         output_filepath = f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv"
         optimize_df.to_csv(output_filepath)
         print(f"Optimization complete. Results saved to `{output_filepath}`")
