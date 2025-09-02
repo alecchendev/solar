@@ -138,8 +138,10 @@ def check_downloaded(directory: str, state: State) -> bool:
     return os.path.isdir(state_dir) and len(os.listdir(state_dir)) > 0
 
 
-def download_all_solar_data(directory: str, skip_existing: bool = True):
-    for state in State:
+def download_solar_data_many(
+    directory: str, states: list[State], skip_existing: bool = True
+):
+    for state in states:
         if check_downloaded(directory, state) and skip_existing:
             print(f"Already downloaded {state.full_name()}, skipping...")
             continue
@@ -216,9 +218,9 @@ def metadata_from_filename(state: State, filename: str) -> dict[str, Any]:
     }
 
 
-def create_state_files_df(directory: str) -> pd.DataFrame:
+def create_state_files_df(directory: str, states: list[State]) -> pd.DataFrame:
     rows = []
-    for state in State:
+    for state in states:
         assert check_downloaded(directory, state)
         files = os.listdir(state_data_dir(directory, state.value))
         state_rows = [metadata_from_filename(state, file) for file in files]
@@ -413,6 +415,10 @@ class OptimizeColumn(StringEnum):
     ANNUAL_LOAD_UTILIZATION = "annual load utilization"
 
 
+START_ARRAY_DIM = 30.0
+START_BATTERY_DIM = 30.0
+
+
 def find_minimum_system_cost_parallel(
     solar_cost: float,
     battery_cost: float,
@@ -421,10 +427,10 @@ def find_minimum_system_cost_parallel(
     sol: np.ndarray,
 ) -> dict[str, Any]:
     # Tweak these parameters to trade speed vs. optimality
-    array_dim = 30.0
-    battery_dim = 30.0
-    array_size = array_dim / 2  # start search from 0 to array_dim
-    battery_size = battery_dim / 2  # start search from 0 to battery_dim
+    array_dim = START_ARRAY_DIM
+    battery_dim = START_BATTERY_DIM
+    array_size = START_ARRAY_DIM / 2  # start search from 0 to array_dim
+    battery_size = START_BATTERY_DIM / 2  # start search from 0 to battery_dim
     array_density = 1.0
     battery_density = 1.0
     zoom_factor = 10  # how much to shrink search dim + density each step
@@ -475,10 +481,12 @@ def find_minimum_system_cost_parallel(
 
     # If the optimal sizes are close to the search boundary, we should increase our
     # space to increase the likelihood that we're getting the global optimum.
-    if best_row["battery_size"] >= battery_dim or best_row["array_size"] >= array_dim:
+    if (
+        best_row["battery_size"] >= START_BATTERY_DIM
+        or best_row["array_size"] >= START_ARRAY_DIM
+    ):
         print(
-            "Warning: optimal power configuration approached search boundary,\
-        you may want to consider tweaking search dimensions."
+            "Warning: optimal power configuration approached search boundary, you may want to consider tweaking search dimensions."
         )
 
     return {
@@ -512,13 +520,17 @@ def compute_optimal_power_across_loads(
     sol: np.ndarray,
 ) -> pd.DataFrame:
     results = []
-    for load_cost in load_costs:
-        print(f"Optimizing load cost: {load_cost}...")
+    for i, load_cost in enumerate(load_costs):
+        print(
+            f"Optimizing load cost: {i}/{len(load_costs)}: {round(load_cost, 2)}",
+            end="\r",
+        )
         results.append(
             find_minimum_system_cost_parallel(
                 solar_cost, battery_cost, load_cost, load, sol
             )
         )
+    print(" " * 100, end="\r")
     return pd.DataFrame(results)
 
 
@@ -873,6 +885,62 @@ def plot_power_cost_per_energy_by_load_cost(
 # - Plot utilization for each day over a year
 # - Plot power generation over a day, overlaying all days onto one graph
 
+# All
+
+
+def mean_plant_for_state(directory: str, state: State) -> pd.DataFrame:
+    state_file_df = create_state_files_df(directory, [state])
+    state_files_5min = state_file_df.loc[
+        state_file_df[DatasetColumn.TIME_INTERVAL_MIN] == 5
+    ]
+    plant_count = len(state_files_5min)
+
+    dfs = []
+    idx = 0
+    for _, row in state_files_5min.iterrows():
+        sol_metadata = row.to_dict()
+        filename = filename_from_dict(row.to_dict())
+        print(f"Reading file {idx}/{plant_count}: {filename}", end="\r")
+        sol_df = read_plant_csv(directory, state, filename)
+        sol_df[PowerColumn.POWER_MW] /= sol_metadata[DatasetColumn.CAPACITY_MW]
+        dfs.append(sol_df)
+        idx += 1
+    print(" " * 100, end="\r")
+    combined_df = pd.concat(dfs, ignore_index=True)
+    return (
+        combined_df.groupby(PowerColumn.LOCAL_TIME)[PowerColumn.POWER_MW]
+        .mean()
+        .reset_index()
+    )
+
+
+def do_all(
+    directory: str,
+    state: State,
+    solar_cost: float,
+    battery_cost: float,
+    output_directory: str,
+):
+    print(f"Processing {state.full_name()} ...")
+    # Get average sol for each
+    sol_df = mean_plant_for_state(directory, state)
+
+    # Optimize on each
+    optimize_df = compute_optimal_power_across_loads(
+        solar_cost=solar_cost,
+        battery_cost=battery_cost,
+        load_costs=DEFAULT_LOAD_COSTS,
+        load=1.0,
+        sol=sol_df[PowerColumn.POWER_MW].to_numpy(),
+    )
+
+    output_filepath = f"{output_directory}/mean_power_optimal.csv"
+    optimize_df.to_csv(output_filepath)
+    print(f"Optimization complete. Results saved to `{output_filepath}`")
+
+    # TODO: Output plots for each
+
+
 # Main CLI
 
 
@@ -880,6 +948,7 @@ class Command(StringEnum):
     DOWNLOAD = "download"
     OPTIMIZE = "optimize"
     PLOT = "plot"
+    ALL = "all"
 
 
 class PlotKind(StringEnum):
@@ -890,6 +959,10 @@ class PlotKind(StringEnum):
     UTIL_BY_COST = "util-by-cost"
     POWER_COST_PER_ENERGY_BY_LOAD_COST = "power-cost-by-load-cost"
 
+
+DEFAULT_SOLAR_COST = 200_000  # $/MW
+DEFAULT_BATTERY_COST = 200_000  # $/MWh
+DEFAULT_LOAD_COSTS = list(10_000 * 10 ** np.arange(0, 0.2, 0.1))  # $/MW
 
 DEFAULT_DATA_DIRECTORY = "data"
 DEFAULT_OUTPUT_DIRECTORY = "output"
@@ -940,13 +1013,13 @@ def main():
     optimize_parser.add_argument(
         "--solar-cost",
         type=float,
-        default=200_000,
+        default=DEFAULT_SOLAR_COST,
         help=f"$/MW used for solar cost in the optimization. Defaults to `200,000`",
     )
     optimize_parser.add_argument(
         "--battery-cost",
         type=float,
-        default=200_000,
+        default=DEFAULT_BATTERY_COST,
         help=f"$/MWh used for battery cost in the optimization. Defaults to `200,000`",
     )
     optimize_parser.add_argument(
@@ -1044,8 +1117,44 @@ def main():
     )
 
     # TODO: everything (optimize for a state's average plant, not literally every single one)
-    subparsers.add_parser(
-        "all", help="Download, optimize, and plot across all available datasets"
+    all_parser = subparsers.add_parser(
+        Command.ALL,
+        help="Download, optimize, and plot average plants across several default states",
+    )
+    all_parser.add_argument(
+        "--directory",
+        default=DEFAULT_DATA_DIRECTORY,
+        help=f"Directory where state data to is located. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+    )
+    all_parser.add_argument(
+        "--states",
+        nargs="*",
+        type=str,
+        default=[
+            State.ARIZONA,
+            State.CALIFORNIA,
+            State.MAINE,
+            State.TEXAS,
+            State.WASHINGTON,
+        ],
+        help="States to process.",
+    )
+    all_parser.add_argument(
+        "--solar-cost",
+        type=float,
+        default=DEFAULT_SOLAR_COST,
+        help=f"$/MW used for solar cost in the optimization. Defaults to `200,000`",
+    )
+    all_parser.add_argument(
+        "--battery-cost",
+        type=float,
+        default=DEFAULT_BATTERY_COST,
+        help=f"$/MWh used for battery cost in the optimization. Defaults to `200,000`",
+    )
+    all_parser.add_argument(
+        "--output-directory",
+        default=DEFAULT_OUTPUT_DIRECTORY,
+        help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
     )
 
     args = parser.parse_args()
@@ -1054,7 +1163,7 @@ def main():
         if args.all == (args.state != ""):
             print("Error: Please specify either --state or --all")
         elif args.all:
-            download_all_solar_data(args.directory)
+            download_solar_data_many(args.directory, [state for state in State])
         elif not State.valid(args.state):
             print(
                 f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
@@ -1065,6 +1174,11 @@ def main():
         if not State.valid(args.state):
             print(
                 f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
+            )
+            return
+        if not os.path.exists(args.directory) or not os.path.isdir(args.directory):
+            print(
+                f"Data directory '{args.directory}' either doesn't exist or is not a directory"
             )
             return
         if os.path.exists(args.output_directory) and not os.path.isdir(
@@ -1080,31 +1194,28 @@ def main():
             print(f"Created directory: {args.output_directory}")
 
         state = State.from_str(args.state)
-        sol_df = read_plant_csv(args.directory, state, args.file)
         sol_metadata = metadata_from_filename(state, args.file)
+        sol_df = read_plant_csv(args.directory, state, args.file)
+        sol = (
+            sol_df[PowerColumn.POWER_MW] / sol_metadata[DatasetColumn.CAPACITY_MW]
+        ).to_numpy()
 
         optimize_df = pd.DataFrame()
         if args.reference:
             optimize_df = compute_optimal_power_across_loads_gradient(
                 solar_cost=args.solar_cost,
                 battery_cost=args.battery_cost,
-                load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
+                load_costs=DEFAULT_LOAD_COSTS,
                 load=1.0,
-                sol=(
-                    sol_df[PowerColumn.POWER_MW]
-                    / sol_metadata[DatasetColumn.CAPACITY_MW]
-                ).to_numpy(),
+                sol=sol,
             )
         else:
             optimize_df = compute_optimal_power_across_loads(
                 solar_cost=args.solar_cost,
                 battery_cost=args.battery_cost,
-                load_costs=list(10_000 * 10 ** np.arange(0, 0.1, 0.1)),
+                load_costs=DEFAULT_LOAD_COSTS,
                 load=1.0,
-                sol=(
-                    sol_df[PowerColumn.POWER_MW]
-                    / sol_metadata[DatasetColumn.CAPACITY_MW]
-                ).to_numpy(),
+                sol=sol,
             )
         output_filepath = f"{DEFAULT_OUTPUT_DIRECTORY}/output.csv"
         optimize_df.to_csv(output_filepath)
@@ -1117,7 +1228,9 @@ def main():
                 )
             else:
                 state = State.from_str(args.state)
-                files_df = create_state_files_df(args.directory)
+                files_df = create_state_files_df(
+                    args.directory, [state for state in State]
+                )
                 filename = plot_state_map(files_df, state)
                 print(
                     f"Map saved to file://{os.path.abspath(filename)} - open in browser to view (or run `open {filename}`)"
@@ -1165,6 +1278,33 @@ def main():
                 print(f"Plot successfully saved to {args.output}.")
         else:
             plot_parser.print_help()
+    elif args.command == Command.ALL:
+        for state in args.states:
+            if not State.valid(state):
+                print(
+                    f"Error: {state} is not a valid state. Available states: {', '.join(State.all())}"
+                )
+                return
+        if not os.path.exists(args.directory) or not os.path.isdir(args.directory):
+            print(
+                f"Data directory '{args.directory}' either doesn't exist or is not a directory"
+            )
+            return
+        if os.path.exists(args.output_directory) and not os.path.isdir(
+            args.output_directory
+        ):
+            print(
+                f"Output directory '{args.output_directory}' exists but is not a directory"
+            )
+            return
+
+        states = [State.from_str(state) for state in args.states]
+        for state in states:
+            state_dir = f"{args.output_directory}/{state}"
+            if not os.path.exists(state_dir):
+                os.makedirs(state_dir)
+                print(f"Created directory: {state_dir}")
+            do_all(args.directory, state, args.solar_cost, args.battery_cost, state_dir)
     else:
         parser.print_help()
 
