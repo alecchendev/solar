@@ -738,7 +738,7 @@ US_STATE_CENTERS = {
 }
 
 
-def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
+def plot_state_map(files_df: pd.DataFrame, state: State, output_filepath: str):
     """Create a folium map showing solar plant locations for a state"""
     center = US_STATE_CENTERS[state]
     actual_state_df = files_df.loc[
@@ -758,9 +758,8 @@ def plot_state_map(files_df: pd.DataFrame, state: State) -> str:
             icon=folium.Icon(color="red", icon="info-sign"),
         ).add_to(m)
 
-    filename = f"{state}_map.html"
-    m.save(filename)
-    return filename
+    m.save(output_filepath)
+    print(f"Plot successfully saved to {output_filepath}")
 
 
 # Plot optimization results
@@ -782,10 +781,12 @@ def plot_cost_by_utilization(df: pd.DataFrame, output_filepath: str):
     plt.title("What contributes to cost as you seek higher utilization?")
     plt.xlabel("Utilization")
     plt.ylabel("Cost ($/MW)")
-    plt.xlim([0, 1])
+    plt.xlim([1e-3, 1])
     plt.ylim([1 * 10**4, 1 * 10**7])
     plt.legend()
     plt.savefig(output_filepath)
+    plt.close()
+    print(f"Plot successfully saved to {output_filepath}")
 
 
 def plot_sub_cost_by_load_cost(df: pd.DataFrame, output_filepath: str):
@@ -809,6 +810,8 @@ def plot_sub_cost_by_load_cost(df: pd.DataFrame, output_filepath: str):
     plt.yscale("log")
     plt.legend()
     plt.savefig(output_filepath)
+    plt.close()
+    print(f"Plot successfully saved to {output_filepath}")
 
 
 def plot_power_cost_per_energy_by_utilization(df: pd.DataFrame, output_filepath: str):
@@ -830,9 +833,11 @@ def plot_power_cost_per_energy_by_utilization(df: pd.DataFrame, output_filepath:
     plt.title("What is the cost of the power system across varying load costs?")
     plt.xlabel("Load utilization")
     plt.ylabel("$/MWh when used")
-    plt.xlim([0, 1])
+    plt.xlim([1e-3, 1])
     plt.legend()
     plt.savefig(output_filepath)
+    plt.close()
+    print(f"Plot successfully saved to {output_filepath}")
 
 
 def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
@@ -844,6 +849,8 @@ def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
     plt.ylabel("Optimal utilization")
     plt.xscale("log")
     plt.savefig(output_filepath)
+    plt.close()
+    print(f"Plot successfully saved to {output_filepath}")
 
 
 def plot_power_cost_per_energy_by_load_cost_locations(
@@ -864,6 +871,8 @@ def plot_power_cost_per_energy_by_load_cost_locations(
     plt.yscale("log")
     plt.legend()
     plt.savefig(output_filepath)
+    plt.close()
+    print(f"Plot successfully saved to {output_filepath}")
 
 
 def plot_power_cost_per_energy_by_load_cost(
@@ -915,7 +924,7 @@ def do_all(
     solar_cost: float,
     battery_cost: float,
     output_directory: str,
-):
+) -> pd.DataFrame:
     print(f"Processing {state.full_name()} ...")
     download_state_solar_data(directory, state)
 
@@ -935,7 +944,24 @@ def do_all(
     optimize_df.to_csv(output_filepath)
     print(f"Optimization complete. Results saved to `{output_filepath}`")
 
-    # TODO: Output plots for each
+    # All plots
+    files_df = create_state_files_df(directory, [state])
+    plot_state_map(files_df, state, f"{output_directory}/map.html")
+    plot_cost_by_utilization(optimize_df, f"{output_directory}/cost_by_util.png")
+    plot_sub_cost_by_load_cost(
+        optimize_df, f"{output_directory}/sub_cost_by_load_cost.png"
+    )
+    plot_power_cost_per_energy_by_utilization(
+        optimize_df, f"{output_directory}/power_cost_per_energy_by_util.png"
+    )
+    plot_utilization_by_load_cost(optimize_df, f"{output_directory}/util_by_cost.png")
+    plot_power_cost_per_energy_by_load_cost(
+        state.full_name(),
+        optimize_df,
+        f"{output_directory}/power_cost_per_energy_by_load_cost.png",
+    )
+
+    return optimize_df
 
 
 # Main CLI
@@ -1047,6 +1073,11 @@ def main():
         "--directory",
         default=DEFAULT_DATA_DIRECTORY,
         help=f"Used in `map` plot kind. Directory data was download to. Defaults to `{DEFAULT_DATA_DIRECTORY}`",  # Expects data directory to be structured as this tool downloads data
+    )
+    plot_map_parser.add_argument(
+        "--output-directory",
+        default=DEFAULT_OUTPUT_DIRECTORY,
+        help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
     )
 
     # Plot - cost by util
@@ -1233,43 +1264,45 @@ def main():
                 print(
                     f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
                 )
-            else:
-                state = State.from_str(args.state)
-                files_df = create_state_files_df(
-                    args.directory, [state for state in State]
-                )
-                filename = plot_state_map(files_df, state)
+                return
+            if os.path.exists(args.output_directory) and not os.path.isdir(
+                args.output_directory
+            ):
                 print(
-                    f"Map saved to file://{os.path.abspath(filename)} - open in browser to view (or run `open {filename}`)"
+                    f"Output directory '{args.output_directory}' exists but is not a directory"
                 )
+                return
+            state = State.from_str(args.state)
+            files_df = create_state_files_df(args.directory, [state for state in State])
+            state_dir = f"{args.output_directory}/{state}"
+            if not os.path.exists(state_dir):
+                os.makedirs(state_dir)
+                print(f"Created directory: {state_dir}")
+            plot_state_map(files_df, state, f"{state_dir}/map.html")
         elif args.plot_kind == PlotKind.COST_BY_UTIL:
             if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
                 print(f"Error: {args.input} is not a valid input file.")
             else:
                 df = pd.read_csv(args.input)
                 plot_cost_by_utilization(df, args.output)
-                print(f"Plot successfully saved to {args.output}.")
         elif args.plot_kind == PlotKind.SUB_COST_BY_LOAD_COST:
             if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
                 print(f"Error: {args.input} is not a valid input file.")
             else:
                 df = pd.read_csv(args.input)
                 plot_sub_cost_by_load_cost(df, args.output)
-                print(f"Plot successfully saved to {args.output}.")
         elif args.plot_kind == PlotKind.POWER_COST_PER_ENERGY_BY_UTIL:
             if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
                 print(f"Error: {args.input} is not a valid input file.")
             else:
                 df = pd.read_csv(args.input)
                 plot_power_cost_per_energy_by_utilization(df, args.output)
-                print(f"Plot successfully saved to {args.output}.")
         elif args.plot_kind == PlotKind.UTIL_BY_COST:
             if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
                 print(f"Error: {args.input} is not a valid input file.")
             else:
                 df = pd.read_csv(args.input)
                 plot_utilization_by_load_cost(df, args.output)
-                print(f"Plot successfully saved to {args.output}.")
         elif args.plot_kind == PlotKind.POWER_COST_PER_ENERGY_BY_LOAD_COST:
             if not os.path.isfile(args.input) or not args.input.endswith(".csv"):
                 print(f"Error: {args.input} is not a valid input file.")
@@ -1282,7 +1315,6 @@ def main():
                 plot_power_cost_per_energy_by_load_cost(
                     State.from_str(args.state).full_name(), df, args.output
                 )
-                print(f"Plot successfully saved to {args.output}.")
         else:
             plot_parser.print_help()
     elif args.command == Command.ALL:
@@ -1306,12 +1338,20 @@ def main():
             return
 
         states = [State.from_str(state) for state in args.states]
+        optimize_dfs = []
         for state in states:
             state_dir = f"{args.output_directory}/{state}"
             if not os.path.exists(state_dir):
                 os.makedirs(state_dir)
                 print(f"Created directory: {state_dir}")
-            do_all(args.directory, state, args.solar_cost, args.battery_cost, state_dir)
+            optimize_df = do_all(
+                args.directory, state, args.solar_cost, args.battery_cost, state_dir
+            )
+            optimize_dfs.append(optimize_df)
+        plot_power_cost_per_energy_by_load_cost_locations(
+            list(zip([state.full_name() for state in states], optimize_dfs)),
+            f"{args.output_directory}/states_power_cost_per_energy_by_load_cost.png",
+        )
     else:
         parser.print_help()
 
