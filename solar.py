@@ -116,36 +116,31 @@ def state_data_dir(directory: str, state: str) -> str:
     return f"{directory}/{state}"
 
 
-def download_state_solar_data(directory: str, state: State):
-    print(f"Downloading solar data for {state.full_name()}...")
+def check_downloaded(directory: str, state: State) -> bool:
+    state_dir = state_data_dir(directory, state.value)
+    return os.path.isdir(state_dir) and len(os.listdir(state_dir)) > 0
+
+
+def download_state_solar_data(directory: str, state: State, skip_existing: bool = True):
+    if check_downloaded(directory, state) and skip_existing:
+        print(f"Already downloaded solar data for {state.full_name()}, skipping...")
+        return
+    print(f"Downloading solar data for {state.full_name()}...", end="\r")
     os.makedirs(directory, exist_ok=True)
     url = state_download_url(state.value)
     extract_to = state_data_dir(directory, state.value)
     os.makedirs(extract_to, exist_ok=True)
     r = requests.get(url)
-    print("Extracting files...")
+    print("Extracting files...", end="\r")
     try:
         z = zipfile.ZipFile(io.BytesIO(r.content))
     except Exception as e:
         print("Error when creating zip file from content:", e)
         return
     z.extractall(extract_to)
-    print(f"Downloaded: {len(os.listdir(extract_to))} total")
-
-
-def check_downloaded(directory: str, state: State) -> bool:
-    state_dir = state_data_dir(directory, state.value)
-    return os.path.isdir(state_dir) and len(os.listdir(state_dir)) > 0
-
-
-def download_solar_data_many(
-    directory: str, states: list[State], skip_existing: bool = True
-):
-    for state in states:
-        if check_downloaded(directory, state) and skip_existing:
-            print(f"Already downloaded {state.full_name()}, skipping...")
-            continue
-        download_state_solar_data(directory, state)
+    print(
+        f"Downloaded solar data for {state.full_name()}: {len(os.listdir(extract_to))} total"
+    )
 
 
 # File metadata
@@ -922,6 +917,8 @@ def do_all(
     output_directory: str,
 ):
     print(f"Processing {state.full_name()} ...")
+    download_state_solar_data(directory, state)
+
     # Get average sol for each
     sol_df = mean_plant_for_state(directory, state)
 
@@ -1162,14 +1159,24 @@ def main():
     if args.command == Command.DOWNLOAD:
         if args.all == (args.state != ""):
             print("Error: Please specify either --state or --all")
-        elif args.all:
-            download_solar_data_many(args.directory, [state for state in State])
-        elif not State.valid(args.state):
+            return
+        if not os.path.exists(args.directory) or not os.path.isdir(args.directory):
+            print(
+                f"Data directory '{args.directory}' either doesn't exist or is not a directory"
+            )
+            return
+        if args.state != "" and not State.valid(args.state):
             print(
                 f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
             )
+            return
+        states = []
+        if args.all:
+            states = [state for state in State]
         else:
-            download_state_solar_data(args.directory, State.from_str(args.state))
+            states = [State.from_str(args.state)]
+        for state in states:
+            download_state_solar_data(args.directory, state)
     elif args.command == Command.OPTIMIZE:
         if not State.valid(args.state):
             print(
