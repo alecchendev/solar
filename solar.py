@@ -675,12 +675,17 @@ def compute_optimal_power_across_loads_gradient(
     sol: np.ndarray,
 ) -> pd.DataFrame:
     """Version using the gradient-based optimization"""
-    return pd.DataFrame(
-        [
+    results = []
+    for i, load_cost in enumerate(load_costs):
+        print(
+            f"Optimizing load cost: {i}/{len(load_costs)}: {round(load_cost, 2)}",
+            end="\r",
+        )
+        results.append(
             find_minimum_system_cost_gradient(solar_cost, battery_cost, load_cost, sol)
-            for load_cost in load_costs
-        ]
-    )
+        )
+    print(" " * 100, end="\r")
+    return pd.DataFrame(results)
 
 
 # Plot state maps
@@ -924,6 +929,7 @@ def do_all(
     solar_cost: float,
     battery_cost: float,
     output_directory: str,
+    reference: bool = False
 ) -> pd.DataFrame:
     print(f"Processing {state.full_name()} ...")
     download_state_solar_data(directory, state)
@@ -932,13 +938,23 @@ def do_all(
     sol_df = mean_plant_for_state(directory, state)
 
     # Optimize on each
-    optimize_df = compute_optimal_power_across_loads(
-        solar_cost=solar_cost,
-        battery_cost=battery_cost,
-        load_costs=DEFAULT_LOAD_COSTS,
-        load=1.0,
-        sol=sol_df[PowerColumn.POWER_MW].to_numpy(),
-    )
+    optimize_df = pd.DataFrame()
+    if reference:
+        optimize_df = compute_optimal_power_across_loads_gradient(
+            solar_cost=solar_cost,
+            battery_cost=battery_cost,
+            load_costs=DEFAULT_LOAD_COSTS,
+            load=1.0,
+            sol=sol_df[PowerColumn.POWER_MW].to_numpy(),
+        )
+    else:
+        optimize_df = compute_optimal_power_across_loads(
+            solar_cost=solar_cost,
+            battery_cost=battery_cost,
+            load_costs=DEFAULT_LOAD_COSTS,
+            load=1.0,
+            sol=sol_df[PowerColumn.POWER_MW].to_numpy(),
+        )
 
     output_filepath = f"{output_directory}/mean_power_optimal.csv"
     optimize_df.to_csv(output_filepath)
@@ -1180,6 +1196,11 @@ def main():
         help=f"$/MWh used for battery cost in the optimization. Defaults to `200,000`",
     )
     all_parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="Optimize via reference re-implementation, i.e. gradient descent.",
+    )
+    all_parser.add_argument(
         "--output-directory",
         default=DEFAULT_OUTPUT_DIRECTORY,
         help=f"Directory to output results to. Defaults to `{DEFAULT_OUTPUT_DIRECTORY}`",
@@ -1345,7 +1366,7 @@ def main():
                 os.makedirs(state_dir)
                 print(f"Created directory: {state_dir}")
             optimize_df = do_all(
-                args.directory, state, args.solar_cost, args.battery_cost, state_dir
+                args.directory, state, args.solar_cost, args.battery_cost, state_dir, args.reference
             )
             optimize_dfs.append(optimize_df)
         plot_power_cost_per_energy_by_load_cost_locations(
