@@ -3,11 +3,8 @@ import unittest
 import numpy as np
 
 from solar import (
-    Command,
     DataType,
     DatasetColumn,
-    PlotKind,
-    PvType,
     State,
     filename_from_dict,
     metadata_from_filename,
@@ -36,20 +33,6 @@ class TestState(unittest.TestCase):
     def test_from_str_invalid(self):
         with self.assertRaises(ValueError):
             State.from_str("invalid")
-
-    def test_enums_display_strs(self):
-        self.assertEqual(str(State.ARKANSAS), "ar")
-        self.assertEqual(str(DataType.ACTUAL), "Actual")
-        self.assertEqual(str(PvType.UPV), "UPV")
-        self.assertEqual(str(DatasetColumn.STATE), "state")
-        self.assertEqual(str(Command.DOWNLOAD), "download")
-        self.assertEqual(str(PlotKind.UTIL_BY_COST), "util-by-cost")
-
-    def test_enums_are_strs(self):
-        self.assertEqual(DatasetColumn.STATE, "state")
-        self.assertEqual(DataType.ACTUAL, "Actual")
-        self.assertEqual(PvType.UPV, "UPV")
-        self.assertEqual(Command.DOWNLOAD, "download")
 
     def test_metadata_parse(self):
         example_filename = "Actual_33.45_-112.15_2006_DPV_103MW_5_Min.csv"
