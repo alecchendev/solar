@@ -134,7 +134,7 @@ def download_state_solar_data(directory: str, state: State, skip_existing: bool 
         return
     z.extractall(extract_to)
     print(
-        f"Downloaded solar data for {state.full_name()}: {len(os.listdir(extract_to))} total"
+        f"Downloaded solar data for {state.full_name()} to {extract_to}: {len(os.listdir(extract_to))} total"
     )
 
 
@@ -226,8 +226,8 @@ class PowerColumn(StrEnum):
     POWER_MW = "power_mw"
 
 
-def read_plant_csv(directory: str, state: State, filename: str) -> pd.DataFrame:
-    return pd.read_csv(f"{directory}/{state}/{filename}").rename(
+def read_plant_csv(filename: str) -> pd.DataFrame:
+    return pd.read_csv(filename).rename(
         columns={"LocalTime": PowerColumn.LOCAL_TIME, "Power(MW)": PowerColumn.POWER_MW}
     )
 
@@ -738,7 +738,7 @@ def mean_plant_for_state(directory: str, state: State) -> pd.DataFrame:
         sol_metadata = row.to_dict()
         filename = filename_from_dict(row.to_dict())
         print(f"Reading file {idx}/{plant_count}: {filename}", end="\r")
-        sol_df = read_plant_csv(directory, state, filename)
+        sol_df = read_plant_csv(f"{directory}/{state}/{filename}")
         sol_df[PowerColumn.POWER_MW] /= sol_metadata[DatasetColumn.CAPACITY_MW]
         dfs.append(sol_df)
         idx += 1
@@ -797,7 +797,9 @@ class Command(StrEnum):
 
 DEFAULT_SOLAR_COST = 200_000  # $/MW
 DEFAULT_BATTERY_COST = 200_000  # $/MWh
-DEFAULT_LOAD_COSTS = list(10_000 * 10 ** np.arange(0, 4.1, 0.1))  # $/MW
+DEFAULT_LOAD_COSTS = list(
+    float(x) for x in 10_000 * 10 ** np.arange(0, 4.1, 0.1)
+)  # $/MW
 
 DEFAULT_DATA_DIRECTORY = "data"
 DEFAULT_OUTPUT_DIRECTORY = "output"
@@ -865,9 +867,9 @@ def main():
         "--state", required=True, help="Which state to plot a map of solar plants."
     )
     optimize_parser.add_argument(
-        "--file",
+        "--input",
         required=True,
-        help="The filename for the plant's power generation dataset.",
+        help="The filepath for the plant's power generation dataset.",
     )
     optimize_parser.add_argument(
         "--solar-cost",
@@ -973,6 +975,7 @@ def main():
 
     if args.command == Command.DOWNLOAD:
         if args.all == (args.state != ""):
+            download_parser.print_help()
             print("Error: Please specify either --state or --all")
             return
         validate_dir_or_create(args.directory)
@@ -986,8 +989,9 @@ def main():
         validate_state(args.state)
         validate_dir_exists(args.directory)
         state = State.from_str(args.state)
-        sol_metadata = metadata_from_filename(state, args.file)
-        sol_df = read_plant_csv(args.directory, state, args.file)
+        filename = os.path.basename(args.input)
+        sol_metadata = metadata_from_filename(state, filename)
+        sol_df = read_plant_csv(args.input)
         sol = (
             sol_df[PowerColumn.POWER_MW] / sol_metadata[DatasetColumn.CAPACITY_MW]
         ).to_numpy()
@@ -1000,7 +1004,7 @@ def main():
         )
         state_dir = f"{args.output_directory}/{state}"
         validate_dir_or_create(state_dir)
-        output_filepath = f"{state_dir}/{args.file}_optimize.csv"
+        output_filepath = f"{state_dir}/{filename}_optimize.csv"
         optimize_df.to_csv(output_filepath)
         print(f"Optimization complete. Results saved to `{output_filepath}`")
     elif args.command == Command.PLOT:
