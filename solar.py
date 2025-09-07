@@ -230,6 +230,16 @@ def read_plant_csv(directory: str, state: State, filename: str) -> pd.DataFrame:
     )
 
 
+class UptimeColumn(StrEnum):
+    COST = "cost"
+    BATTERY_SIZE = "battery_size"
+    ARRAY_SIZE = "array_size"
+    CAPACITY = "capacity"
+    LOAD = "load"
+    UPTIME = "uptime"
+    UTILIZATION = "utilization"
+
+
 def uptime_with_battery_with_inputs(
     load: float, battery_sizes: np.ndarray, array_sizes: np.ndarray, sol: np.ndarray
 ) -> pd.DataFrame:
@@ -338,12 +348,12 @@ def uptime_with_battery_with_inputs(
     # Construct DataFrame
     df = pd.DataFrame(
         {
-            "battery_size": battery_size_flat,
-            "array_size": array_size_flat,
-            "capacity": caps_flat,
-            "load": loads_flat,
-            "uptime": uptime_flat,
-            "utilization": utilization_flat,
+            UptimeColumn.BATTERY_SIZE: battery_size_flat,
+            UptimeColumn.ARRAY_SIZE: array_size_flat,
+            UptimeColumn.CAPACITY: caps_flat,
+            UptimeColumn.LOAD: loads_flat,
+            UptimeColumn.UPTIME: uptime_flat,
+            UptimeColumn.UTILIZATION: utilization_flat,
         }
     )
 
@@ -418,24 +428,28 @@ def find_minimum_system_cost_parallel(
         battery_sizes = np.arange(max(start_battery, 0), end_battery, battery_density)
 
         costs = uptime_with_battery_with_inputs(load, battery_sizes, array_sizes, sol)
-        costs["cost"] = all_in_system_cost(
+        costs[UptimeColumn.COST] = all_in_system_cost(
             solar_cost,
             battery_cost,
             load_cost,
-            costs["capacity"].to_numpy(),
-            costs["load"].to_numpy(),
-            costs["utilization"].to_numpy(),
+            costs[UptimeColumn.CAPACITY].to_numpy(),
+            costs[UptimeColumn.LOAD].to_numpy(),
+            costs[UptimeColumn.UTILIZATION].to_numpy(),
         )
 
-        best_rows = costs.loc[costs["cost"] == costs["cost"].min()]
+        best_rows = costs.loc[
+            costs[UptimeColumn.COST] == costs[UptimeColumn.COST].min()
+        ]
         best_row = best_rows.iloc[0]
         # Add a small amount to accept a tolerance for floating point shenanigans
-        assert min_cost is None or best_row["cost"] <= min_cost + 0.0000001, (
-            f"{min_cost} {best_row['cost']} > {min_cost}, {battery_size} != {best_row['battery_size']}, {array_size} != {best_row['array_size']}"
+        assert (
+            min_cost is None or best_row[UptimeColumn.COST] <= min_cost + 0.0000001
+        ), (
+            f"{min_cost} {best_row[UptimeColumn.COST]} > {min_cost}, {battery_size} != {best_row[UptimeColumn.BATTERY_SIZE]}, {array_size} != {best_row[UptimeColumn.ARRAY_SIZE]}"
         )
-        min_cost = best_row["cost"]
-        battery_size = best_row["battery_size"]
-        array_size = best_row["array_size"]
+        min_cost = best_row[UptimeColumn.COST]
+        battery_size = best_row[UptimeColumn.BATTERY_SIZE]
+        array_size = best_row[UptimeColumn.ARRAY_SIZE]
         assert min_cost >= 0
 
         array_dim /= zoom_factor
@@ -449,8 +463,8 @@ def find_minimum_system_cost_parallel(
     # If the optimal sizes are close to the search boundary, we should increase our
     # space to increase the likelihood that we're getting the global optimum.
     if (
-        best_row["battery_size"] >= START_BATTERY_DIM
-        or best_row["array_size"] >= START_ARRAY_DIM
+        best_row[UptimeColumn.BATTERY_SIZE] >= START_BATTERY_DIM
+        or best_row[UptimeColumn.ARRAY_SIZE] >= START_ARRAY_DIM
     ):
         print(
             "Warning: optimal power configuration approached search boundary, you may want to consider tweaking search dimensions."
@@ -472,10 +486,10 @@ def find_minimum_system_cost_parallel(
         + battery_cost * battery_size
         + load_cost,
         OptimizeColumn.TOTAL_SYSTEM_COST_PER_UTILIZATION: min_cost,
-        OptimizeColumn.BATTERY_SIZE_RELATIVE: best_row["capacity"],
-        OptimizeColumn.LOAD_SIZE_RELATIVE: best_row["load"],
-        OptimizeColumn.ANNUAL_BATTERY_UTILIZATION: best_row["uptime"],
-        OptimizeColumn.ANNUAL_LOAD_UTILIZATION: best_row["utilization"],
+        OptimizeColumn.BATTERY_SIZE_RELATIVE: best_row[UptimeColumn.CAPACITY],
+        OptimizeColumn.LOAD_SIZE_RELATIVE: best_row[UptimeColumn.LOAD],
+        OptimizeColumn.ANNUAL_BATTERY_UTILIZATION: best_row[UptimeColumn.UPTIME],
+        OptimizeColumn.ANNUAL_LOAD_UTILIZATION: best_row[UptimeColumn.UTILIZATION],
     }
 
 
