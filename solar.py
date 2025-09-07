@@ -1013,7 +1013,7 @@ def main():
         validate_dir_or_create(state_dir)
         if args.plot_kind == "map":
             validate_dir_exists(args.directory)
-            files_df = create_state_files_df(args.directory, [state for state in State])
+            files_df = create_state_files_df(args.directory, [state])
             plot_state_map(files_df, state, f"{state_dir}/map.html")
         elif args.plot_kind == "optimize":
             optimize_df = pd.read_csv(args.input)
