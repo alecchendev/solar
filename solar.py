@@ -101,6 +101,7 @@ def state_solar_zip_filename(state: str) -> str:
     return f"{state}-pv-2006.zip"
 
 
+# See https://www.nrel.gov/grid/solar-power-data for more info
 def state_download_url(state: str) -> str:
     return f"https://www.nrel.gov/docs/libraries/grid/{state_solar_zip_filename(state)}"
 
@@ -796,7 +797,7 @@ class Command(StrEnum):
 
 DEFAULT_SOLAR_COST = 200_000  # $/MW
 DEFAULT_BATTERY_COST = 200_000  # $/MWh
-DEFAULT_LOAD_COSTS = list(10_000 * 10 ** np.arange(0, 0.1, 0.1))  # $/MW
+DEFAULT_LOAD_COSTS = list(10_000 * 10 ** np.arange(0, 4.1, 0.1))  # $/MW
 
 DEFAULT_DATA_DIRECTORY = "data"
 DEFAULT_OUTPUT_DIRECTORY = "output"
