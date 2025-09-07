@@ -279,7 +279,7 @@ def uptime_with_battery_with_inputs(
     # 2D matrices for loads and capacities
     # Normalize by array_sizes to avoid scaling many sols for each array_size
     loadsmat = np.tile(load / array_sizes, (n_battery_sizes, 1))
-    capsmat = np.tile(battery_sizes[:, np.newaxis], (1, n_array_sizes)) / loadsmat
+    capsmat = np.tile(battery_sizes[:, np.newaxis], (1, n_array_sizes)) * loadsmat
 
     array_size_mat = np.tile(array_sizes, (n_battery_sizes, 1))
     battery_size_mat = np.tile(battery_sizes[:, np.newaxis], (1, n_array_sizes))
@@ -369,26 +369,6 @@ def all_in_system_cost(
         load * utilization
     )
 
-
-def all_in_system_cost_parallel(
-    solarcost: float,
-    batterycost: float,
-    loadcost: float,
-    load: float,
-    batterysize: np.ndarray,
-    arraysize: np.ndarray,
-    sol: np.ndarray,
-) -> pd.DataFrame:
-    result = uptime_with_battery_with_inputs(load, batterysize, arraysize, sol)
-    result["cost"] = all_in_system_cost(
-        solarcost,
-        batterycost,
-        loadcost,
-        result["capacity"].to_numpy(),
-        result["load"].to_numpy(),
-        result["utilization"].to_numpy(),
-    )
-    return result
 
 
 class OptimizeColumn(StringEnum):
