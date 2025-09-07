@@ -124,6 +124,7 @@ def download_state_solar_data(directory: str, state: State, skip_existing: bool 
     extract_to = state_data_dir(directory, state.value)
     os.makedirs(extract_to, exist_ok=True)
     r = requests.get(url)
+    print(" " * 80, end="\r")
     print("Extracting files...", end="\r")
     try:
         z = zipfile.ZipFile(io.BytesIO(r.content))
@@ -511,7 +512,7 @@ def compute_optimal_power_across_loads(
                 solar_cost, battery_cost, load_cost, load, sol
             )
         )
-    print(" " * 100, end="\r")
+    print(" " * 80, end="\r")
     return pd.DataFrame(results)
 
 
@@ -714,6 +715,7 @@ def plot_power_cost_per_energy_by_load_cost(
         [(location, output_df)], output_filepath
     )
 
+
 def plot_all_optimize_results(
     optimize_df: pd.DataFrame, output_directory: str, state: State
 ):
@@ -730,6 +732,7 @@ def plot_all_optimize_results(
         optimize_df,
         f"{output_directory}/power_cost_per_energy_by_load_cost.png",
     )
+
 
 # Plotting TODO:
 # - File meta data
@@ -757,7 +760,7 @@ def mean_plant_for_state(directory: str, state: State) -> pd.DataFrame:
         sol_df[PowerColumn.POWER_MW] /= sol_metadata[DatasetColumn.CAPACITY_MW]
         dfs.append(sol_df)
         idx += 1
-    print(" " * 100, end="\r")
+    print(" " * 80, end="\r")
     combined_df = pd.concat(dfs, ignore_index=True)
     return (
         combined_df.groupby(PowerColumn.LOCAL_TIME)[PowerColumn.POWER_MW]
@@ -817,6 +820,31 @@ DEFAULT_LOAD_COSTS = list(10_000 * 10 ** np.arange(0, 0.1, 0.1))  # $/MW
 DEFAULT_DATA_DIRECTORY = "data"
 DEFAULT_OUTPUT_DIRECTORY = "output"
 DEFAULT_OUTPUT_PLOT = f"{DEFAULT_OUTPUT_DIRECTORY}/output.png"
+
+
+def validate_dir_exists(directory: str):
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        print(
+            f"Data directory '{directory}' either doesn't exist or is not a directory"
+        )
+        exit(1)
+
+
+def validate_dir_or_create(directory: str):
+    if os.path.exists(directory) and not os.path.isdir(directory):
+        print(f"Output directory '{directory}' exists but is not a directory")
+        exit(1)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Created directory: {directory}")
+
+
+def validate_state(state: str):
+    if state != "" and not State.valid(state):
+        print(
+            f"Error: {state} is not a valid state. Available states: {', '.join(State.all())}"
+        )
+        exit(1)
 
 
 def main():
@@ -965,16 +993,9 @@ def main():
         if args.all == (args.state != ""):
             print("Error: Please specify either --state or --all")
             return
-        if not os.path.exists(args.directory) or not os.path.isdir(args.directory):
-            print(
-                f"Data directory '{args.directory}' either doesn't exist or is not a directory"
-            )
-            return
-        if args.state != "" and not State.valid(args.state):
-            print(
-                f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
-            )
-            return
+        if args.state != "":
+            validate_state(args.state)
+        validate_dir_or_create(args.directory)
         states = []
         if args.all:
             states = [state for state in State]
@@ -983,27 +1004,8 @@ def main():
         for state in states:
             download_state_solar_data(args.directory, state)
     elif args.command == Command.OPTIMIZE:
-        if not State.valid(args.state):
-            print(
-                f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
-            )
-            return
-        if not os.path.exists(args.directory) or not os.path.isdir(args.directory):
-            print(
-                f"Data directory '{args.directory}' either doesn't exist or is not a directory"
-            )
-            return
-        if os.path.exists(args.output_directory) and not os.path.isdir(
-            args.output_directory
-        ):
-            print(
-                f"Output directory '{args.output_directory}' exists but is not a directory"
-            )
-            return
-
-        if not os.path.exists(args.output_directory):
-            os.makedirs(args.output_directory)
-            print(f"Created directory: {args.output_directory}")
+        validate_state(args.state)
+        validate_dir_exists(args.directory)
 
         state = State.from_str(args.state)
         sol_metadata = metadata_from_filename(state, args.file)
@@ -1020,32 +1022,18 @@ def main():
             sol=sol,
         )
         state_dir = f"{args.output_directory}/{state}"
-        if not os.path.exists(state_dir):
-            os.makedirs(state_dir)
-            print(f"Created directory: {state_dir}")
+        validate_dir_or_create(state_dir)
         output_filepath = f"{state_dir}/{args.file}_optimize.csv"
         optimize_df.to_csv(output_filepath)
         print(f"Optimization complete. Results saved to `{output_filepath}`")
     elif args.command == Command.PLOT:
-        if not State.valid(args.state):
-            print(
-                f"Error: {args.state} is not a valid state. Available states: {', '.join(State.all())}"
-            )
-            return
-        if os.path.exists(args.output_directory) and not os.path.isdir(
-            args.output_directory
-        ):
-            print(
-                f"Output directory '{args.output_directory}' exists but is not a directory"
-            )
-            return
+        validate_state(args.state)
         state = State.from_str(args.state)
         state_dir = f"{args.output_directory}/{state}"
-        if not os.path.exists(state_dir):
-            os.makedirs(state_dir)
-            print(f"Created directory: {state_dir}")
+        validate_dir_or_create(state_dir)
 
         if args.plot_kind == "map":
+            validate_dir_exists(args.directory)
             files_df = create_state_files_df(args.directory, [state for state in State])
             plot_state_map(files_df, state, f"{state_dir}/map.html")
         elif args.plot_kind == "optimize":
@@ -1055,31 +1043,15 @@ def main():
             plot_parser.print_help()
     elif args.command == Command.ALL:
         for state in args.states:
-            if not State.valid(state):
-                print(
-                    f"Error: {state} is not a valid state. Available states: {', '.join(State.all())}"
-                )
-                return
-        if not os.path.exists(args.directory) or not os.path.isdir(args.directory):
-            print(
-                f"Data directory '{args.directory}' either doesn't exist or is not a directory"
-            )
-            return
-        if os.path.exists(args.output_directory) and not os.path.isdir(
-            args.output_directory
-        ):
-            print(
-                f"Output directory '{args.output_directory}' exists but is not a directory"
-            )
-            return
+            validate_state(state)
+        validate_dir_or_create(args.directory)
+        validate_dir_or_create(args.output_directory)
 
         states = [State.from_str(state) for state in args.states]
         optimize_dfs = []
         for state in states:
             state_dir = f"{args.output_directory}/{state}"
-            if not os.path.exists(state_dir):
-                os.makedirs(state_dir)
-                print(f"Created directory: {state_dir}")
+            validate_dir_or_create(state_dir)
             optimize_df = do_all(
                 args.directory, state, args.solar_cost, args.battery_cost, state_dir
             )
