@@ -1,10 +1,10 @@
 import argparse
+from typing import Any
+from enum import StrEnum
 import io
 import os
-from typing import Any
-import zipfile
-from enum import Enum
 
+import zipfile
 import requests
 import pandas as pd
 import folium
@@ -12,15 +12,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class StringEnum(str, Enum):
-    """Enum for defining a group of string constants."""
-
-    def __str__(self) -> str:
-        return self.value
-
-
 # Note: no Alaska or Hawaii
-class State(StringEnum):
+class State(StrEnum):
     ALABAMA = "al"
     ARKANSAS = "ar"
     ARIZONA = "az"
@@ -146,18 +139,18 @@ def download_state_solar_data(directory: str, state: State, skip_existing: bool 
 # File metadata
 
 
-class DataType(StringEnum):
+class DataType(StrEnum):
     ACTUAL = "Actual"  # Real power output
     DA = "DA"  # Day ahead forecast
     HA4 = "HA4"  # 4 hour ahead forecast
 
 
-class PvType(StringEnum):
+class PvType(StrEnum):
     UPV = "UPV"  # Utility scale PV
     DPV = "DPV"  # Distributed PV
 
 
-class DatasetColumn(StringEnum):
+class DatasetColumn(StrEnum):
     STATE = "state"
     DATA_TYPE = "data_type"
     LATITUDE = "latitude"
@@ -226,7 +219,7 @@ def create_state_files_df(directory: str, states: list[State]) -> pd.DataFrame:
 # Optimization
 
 
-class PowerColumn(StringEnum):
+class PowerColumn(StrEnum):
     LOCAL_TIME = "local_time"
     POWER_MW = "power_mw"
 
@@ -370,7 +363,7 @@ def all_in_system_cost(
     )
 
 
-class OptimizeColumn(StringEnum):
+class OptimizeColumn(StrEnum):
     SOLAR_COST_MW = "solar cost $/MW"
     BATTERY_COST_MWH = "battery cost $/MWh"
     LOAD_COST_MW = "load cost $/MW"
@@ -792,14 +785,14 @@ def do_all(
 # Main CLI
 
 
-class Command(StringEnum):
+class Command(StrEnum):
     DOWNLOAD = "download"
     OPTIMIZE = "optimize"
     PLOT = "plot"
     ALL = "all"
 
 
-class PlotKind(StringEnum):
+class PlotKind(StrEnum):
     MAP = "map"
     COST_BY_UTIL = "cost-by-util"
     SUB_COST_BY_LOAD_COST = "sub-cost-by-load-cost"
