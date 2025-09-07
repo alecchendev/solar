@@ -250,29 +250,17 @@ def uptime_with_battery_with_inputs(
     Here load is a normalization parameter, i.e. `sol` is assumed to be normalized
     to `load` MW, and we can compute uptime and utilization of many battery +
     array sizes, without having to simulate many scaled versions of `sol`.
-    I think there is a more intuitive way to write this (especially given
-    we're in python land and not mathematica, but I haven't gotten around
-    to it).
 
     An assumption here is that load is constant throughout a sim, when in
-    reality it fluctuates. It would be really cool to get a load data set to fill
-    in the variability across each part of the day/year.
+    reality it fluctuates. It would be cool to simulate load variability for
+    different use cases.
 
     Can also simulate as no battery system if battery_sizes are zero.
 
     Parameters:
-    battery_sizes: List of battery capacities (xWh).
-    array_sizes: List of solar array sizes (xW).
-    sol: Solar generation (xW) over time steps.
-
-    Important thing here is that all parameters are in the same kW vs mW vs etc. unit.
-
-    Returns:
-    pd.DataFrame with the following columns:
-        - Battery capacities
-        - Load demands
-        - Uptime (fraction of time battery is non-empty)
-        - Utilization (fraction of load met)
+    battery_sizes: List of battery capacities (MWh).
+    array_sizes: List of solar array sizes (MW).
+    sol: Power generation (MW) over time steps, for a whole year.
     """
     # Initialize arrays
     n_steps = len(sol)
@@ -611,7 +599,6 @@ def plot_cost_by_utilization(df: pd.DataFrame, output_filepath: str):
     plt.plot(utilization, power_cost, label="Power")
     plt.plot(utilization, total_cost, label="Total")
 
-    plt.title("What contributes to cost as you seek higher utilization?")
     plt.xlabel("Utilization")
     plt.ylabel("Cost ($/MW)")
     plt.xlim([1e-3, 1])
@@ -636,7 +623,6 @@ def plot_sub_cost_by_load_cost(df: pd.DataFrame, output_filepath: str):
     plt.plot(load_cost, total_cost, label="Total")
     plt.plot(load_cost, total_cost_per_util, label="Total per utilization")
 
-    plt.title("How to component costs change to cost with load cost?")
     plt.xlabel("Load capex ($/MW)")
     plt.ylabel("Cost ($/MW)")
     plt.xscale("log")
@@ -663,7 +649,6 @@ def plot_power_cost_per_energy_by_utilization(df: pd.DataFrame, output_filepath:
     )
     plt.plot(u_values, v_values, label="Under-utilized solar")
 
-    plt.title("What is the cost of the power system across varying load costs?")
     plt.xlabel("Load utilization")
     plt.ylabel("$/MWh when used")
     plt.xlim([1e-3, 1])
@@ -677,7 +662,6 @@ def plot_utilization_by_load_cost(df: pd.DataFrame, output_filepath: str):
     utilization = df[OptimizeColumn.ANNUAL_LOAD_UTILIZATION]
     load_cost = df[OptimizeColumn.LOAD_COST_NORMALIZED]
     plt.plot(load_cost, utilization)
-    plt.title("What is the relationship with load cost and optimal utilization?")
     plt.xlabel("Load capex ($/MW)")
     plt.ylabel("Optimal utilization")
     plt.xscale("log")
@@ -695,9 +679,6 @@ def plot_power_cost_per_energy_by_load_cost_locations(
         power_cost = df[OptimizeColumn.TOTAL_POWER_SYSTEM_COST]
         plt.scatter(load_cost, power_cost / (10 * 8760 * utilization), label=location)
 
-    plt.title(
-        "How much does the power system cost per energy across different load costs + locations?"
-    )
     plt.xlabel("Load capex ($/MW)")
     plt.ylabel("Power system capex ($/MWh-load over 10 years)")
     plt.xscale("log")
@@ -734,7 +715,7 @@ def plot_all_optimize_results(
     )
 
 
-# Plotting TODO:
+# Plotting extras TODO:
 # - File meta data
 #   - Plot histogram of capacities for a state
 # - Plot utilization for each day over a year
@@ -891,13 +872,13 @@ def main():
         "--solar-cost",
         type=float,
         default=DEFAULT_SOLAR_COST,
-        help=f"$/MW used for solar cost in the optimization. Defaults to `200,000`",
+        help=f"$/MW used for solar cost in the optimization. Defaults to `{DEFAULT_SOLAR_COST}`",
     )
     optimize_parser.add_argument(
         "--battery-cost",
         type=float,
         default=DEFAULT_BATTERY_COST,
-        help=f"$/MWh used for battery cost in the optimization. Defaults to `200,000`",
+        help=f"$/MWh used for battery cost in the optimization. Defaults to `{DEFAULT_BATTERY_COST}`",
     )
     optimize_parser.add_argument(
         "--output-directory",
@@ -954,7 +935,7 @@ def main():
     all_parser.add_argument(
         "--directory",
         default=DEFAULT_DATA_DIRECTORY,
-        help=f"Directory where state data to is located. Defaults to `{DEFAULT_DATA_DIRECTORY}`",
+        help=f"Directory where state data to is located. Defaults to `{DEFAULT_DATA_DIRECTORY}`",  # Expects data directory to be structured as this tool downloads data
     )
     all_parser.add_argument(
         "--states",
@@ -993,27 +974,22 @@ def main():
         if args.all == (args.state != ""):
             print("Error: Please specify either --state or --all")
             return
-        if args.state != "":
-            validate_state(args.state)
         validate_dir_or_create(args.directory)
-        states = []
         if args.all:
-            states = [state for state in State]
-        else:
-            states = [State.from_str(args.state)]
-        for state in states:
-            download_state_solar_data(args.directory, state)
+            for state in State:
+                download_state_solar_data(args.directory, state)
+        elif args.state != "":
+            validate_state(args.state)
+            download_state_solar_data(args.directory, State.from_str(args.state))
     elif args.command == Command.OPTIMIZE:
         validate_state(args.state)
         validate_dir_exists(args.directory)
-
         state = State.from_str(args.state)
         sol_metadata = metadata_from_filename(state, args.file)
         sol_df = read_plant_csv(args.directory, state, args.file)
         sol = (
             sol_df[PowerColumn.POWER_MW] / sol_metadata[DatasetColumn.CAPACITY_MW]
         ).to_numpy()
-
         optimize_df = compute_optimal_power_across_loads(
             solar_cost=args.solar_cost,
             battery_cost=args.battery_cost,
@@ -1027,11 +1003,13 @@ def main():
         optimize_df.to_csv(output_filepath)
         print(f"Optimization complete. Results saved to `{output_filepath}`")
     elif args.command == Command.PLOT:
+        if args.plot_kind not in ["map", "optimize"]:
+            plot_parser.print_help()
+            return
         validate_state(args.state)
         state = State.from_str(args.state)
         state_dir = f"{args.output_directory}/{state}"
         validate_dir_or_create(state_dir)
-
         if args.plot_kind == "map":
             validate_dir_exists(args.directory)
             files_df = create_state_files_df(args.directory, [state for state in State])
@@ -1039,14 +1017,11 @@ def main():
         elif args.plot_kind == "optimize":
             optimize_df = pd.read_csv(args.input)
             plot_all_optimize_results(optimize_df, state_dir, state)
-        else:
-            plot_parser.print_help()
     elif args.command == Command.ALL:
         for state in args.states:
             validate_state(state)
         validate_dir_or_create(args.directory)
         validate_dir_or_create(args.output_directory)
-
         states = [State.from_str(state) for state in args.states]
         optimize_dfs = []
         for state in states:
