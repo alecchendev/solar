@@ -1,8 +1,8 @@
 # Solar Modeling
 
-A tool to model cost and utilization of solar power systems. Uses power generation data from [NREL's 2006 solar plant datasets](https://www.nrel.gov/grid/solar-power-data).
+A tool to model cost and utilization of solar power systems. Uses power generation data from [NREL's 2006 solar plant datasets](https://www.nrel.gov/grid/solar-power-data). Inspired by [this tweet](https://x.com/CJHandmer/status/1953471456505143337) (reference folder).
 
-https://alecchen.dev/images/solar_demo.mp4
+https://github.com/user-attachments/assets/b8cd1260-c221-4c58-86e0-d41de25def12
 
 (optimization step count decreased for demo)
 
@@ -10,6 +10,12 @@ https://alecchen.dev/images/solar_demo.mp4
 
 *See possible improvements? File an issue! Feedback is welcome!*
 
+- Prerequisites
+    - Python 3 (my specific version is 3.11.13)
+    - Git
+- Clone repository
+    - `git clone https://github.com/alecchendev/solar.git`
+    - `cd solar`
 - Create virtual environment
     - `python3 -m venv venv`
     - `source venv/bin/activate` or whichever works for your shell, e.g. `source venv/bin/activate.fish`
@@ -27,6 +33,7 @@ https://alecchen.dev/images/solar_demo.mp4
     - `ruff check`
 
 Notes on specific commands
+- For any commands that take a state name as input, you can provide the abbreviation or the full name in any case, e.g. "az", "AZ", "aRizONA"
 - For commands where you compute the optimal power configuration (`optimize` and `all`), the default is to run
 for 41 different load costs. This will take roughly 9 minutes for a plant with 5 min
 intervals. You can change this by modifying the constant `DEFAULT_LOAD_COSTS` in the
@@ -56,3 +63,5 @@ the only way to do this is to run the `all` command on the states you want to co
 - Delete mean_plant_for_state, just choose one deterministically
 - Pre-compute optimal results/visuals and serve them from a website so people
 only need to run this script if they want to verify or customize
+- Distribute as a python package so you can just `pip install <name>` and run
+- Expand to consider international data from the [NSRDB](https://nsrdb.nrel.gov/)

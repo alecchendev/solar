@@ -4,6 +4,7 @@ from enum import StrEnum
 import io
 import os
 import zipfile
+import time
 
 import requests
 import pandas as pd
@@ -765,6 +766,7 @@ def do_all(
     sol_df = mean_plant_for_state(directory, state)
 
     # Optimize on each
+    start_time = time.time()
     optimize_df = compute_optimal_power_across_loads(
         solar_cost=solar_cost,
         battery_cost=battery_cost,
@@ -772,10 +774,13 @@ def do_all(
         load=1.0,
         sol=sol_df[PowerColumn.POWER_MW].to_numpy(),
     )
+    elapsed_time = time.time() - start_time
 
     output_filepath = f"{output_directory}/mean_power_optimal.csv"
     optimize_df.to_csv(output_filepath)
-    print(f"Optimization complete. Results saved to `{output_filepath}`")
+    print(
+        f"Optimization complete in {round(elapsed_time, 2)} secs. Results saved to `{output_filepath}`"
+    )
 
     # All plots
     files_df = create_state_files_df(directory, [state])
@@ -957,13 +962,13 @@ def main():
         "--solar-cost",
         type=float,
         default=DEFAULT_SOLAR_COST,
-        help=f"$/MW used for solar cost in the optimization. Defaults to `200,000`",
+        help=f"$/MW used for solar cost in the optimization. Defaults to `{DEFAULT_SOLAR_COST}`",
     )
     all_parser.add_argument(
         "--battery-cost",
         type=float,
         default=DEFAULT_BATTERY_COST,
-        help=f"$/MWh used for battery cost in the optimization. Defaults to `200,000`",
+        help=f"$/MWh used for battery cost in the optimization. Defaults to `{DEFAULT_BATTERY_COST}`",
     )
     all_parser.add_argument(
         "--output-directory",
@@ -995,6 +1000,7 @@ def main():
         sol = (
             sol_df[PowerColumn.POWER_MW] / sol_metadata[DatasetColumn.CAPACITY_MW]
         ).to_numpy()
+        start_time = time.time()
         optimize_df = compute_optimal_power_across_loads(
             solar_cost=args.solar_cost,
             battery_cost=args.battery_cost,
@@ -1002,11 +1008,14 @@ def main():
             load=1.0,
             sol=sol,
         )
+        elapsed_time = time.time() - start_time
         state_dir = f"{args.output_directory}/{state}"
         validate_dir_or_create(state_dir)
         output_filepath = f"{state_dir}/{filename}_optimize.csv"
         optimize_df.to_csv(output_filepath)
-        print(f"Optimization complete. Results saved to `{output_filepath}`")
+        print(
+            f"Optimization complete in {round(elapsed_time, 2)} secs. Results saved to `{output_filepath}`"
+        )
     elif args.command == Command.PLOT:
         if args.plot_kind not in ["map", "optimize"]:
             plot_parser.print_help()
